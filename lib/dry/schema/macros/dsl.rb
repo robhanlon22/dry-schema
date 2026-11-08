@@ -218,6 +218,46 @@ module Dry
 
         private
 
+        # Evaluate member declarations against their own type slot. Nested
+        # macros use the key's name when registering their coercion type.
+        def array_member_block(block)
+          return unless block
+
+          container = custom_type? ? schema_dsl.types[name] : schema_dsl.resolve_type(:array)
+          array = array_branch(container)
+          return block unless array.respond_to?(:of)
+
+          member = array.respond_to?(:member) ? array.member : Types::Any.meta(default: true)
+          member_dsl = schema_dsl.new(
+            path: path, steps: schema_dsl.steps, macros: schema_dsl.macros, types: {name => member}
+          )
+
+          proc do
+            rule = new(chain: false, schema_dsl: member_dsl).instance_exec(&block)
+            inferred = member_dsl.types.fetch(name)
+            type(with_array_member(container, array, inferred)) unless inferred.equal?(member)
+            rule
+          end
+        end
+
+        def array_branch(container)
+          return container unless container.is_a?(::Dry::Types::Sum) && container.optional?
+
+          container.left.primitive?(nil) ? container.right : container.left
+        end
+
+        def with_array_member(container, array, member)
+          updated = array.of(member)
+          return updated if container.equal?(array)
+
+          # Keep the original nil coercer and the order in which the sum tries its branches.
+          if container.right.equal?(array)
+            container.left | updated
+          else
+            updated | container.right
+          end
+        end
+
         # @api private
         def append_macro(macro_type)
           macro = macro_type.new(schema_dsl: schema_dsl, name: name)

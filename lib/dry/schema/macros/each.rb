@@ -14,6 +14,8 @@ module Dry
               type(schema_dsl.array[type_spec])
             end
 
+            block = array_member_block(block) unless type_spec.equal?(:hash)
+
             append_macro(Macros::Value) do |macro|
               macro.call(*predicates, type_spec: type_spec, type_rule: type_rule, **opts, &block)
             end

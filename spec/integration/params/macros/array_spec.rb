@@ -18,6 +18,42 @@ RSpec.describe "Params / Macros / array" do
     end
   end
 
+  it "coerces nested member declarations at the correct array depth" do
+    schema = Dry::Schema.Params do
+      required(:rows).array do
+        filled(:array).each { maybe(:integer) }
+      end
+    end
+
+    result = schema.call("rows" => [["1", ""], ["2"]])
+
+    expect(result).to be_success
+    expect(result.to_h).to eq(rows: [[1, nil], [2]])
+    expect(schema.call(rows: [["bad"]]).errors.to_h).to eq(rows: {0 => {0 => ["must be an integer"]}})
+  end
+
+  it "preserves a nullable array's metadata and coercion when typing its members" do
+    numbers = Types::Params::Array.meta(label: "numbers")
+    schema = Dry::Schema.Params do
+      required(:rows).maybe(numbers) { each { filled(:integer) } }
+    end
+
+    expect(schema.types[:rows].meta).to include(label: "numbers")
+    expect(schema.(rows: "").to_h).to eq(rows: nil)
+    expect(schema.(rows: ["2"]).to_h).to eq(rows: [2])
+  end
+
+  it "infers an array from each when only its member has a declared type" do
+    schema = Dry::Schema.Params do
+      required(:rows).value(:array?).each { filled(:integer) }
+    end
+
+    result = schema.(rows: ["2"])
+
+    expect(result).to be_success
+    expect(result.to_h).to eq(rows: [2])
+  end
+
   context "when inherited" do
     subject(:schema) do
       Dry::Schema.Params(parent: parent) do

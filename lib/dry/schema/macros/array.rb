@@ -21,7 +21,7 @@ module Dry
             if predicates.any? || opts.any? || !is_hash_block
               super(
                 *predicates, type_spec: type_spec, type_rule: type_rule, **opts,
-                &(is_hash_block ? nil : block)
+                &(is_hash_block ? nil : array_member_block(block))
               )
             end
 
