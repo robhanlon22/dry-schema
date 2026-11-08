@@ -479,7 +479,9 @@ module Dry
           kv = key_spec(name, type.member)
           kv.equal?(name) ? name : kv.flatten(1)
         elsif type.meta[:maybe] && type.respond_to?(:right)
-          key_spec(name, type.right)
+          member = type.right
+          member = type.left if member.respond_to?(:primitive) && member.primitive == ::NilClass
+          key_spec(name, member)
         elsif type.respond_to?(:type)
           key_spec(name, type.type)
         else
@@ -510,7 +512,7 @@ module Dry
       end
 
       def types_merger
-        @types_merger ||= TypesMerger.new(type_registry)
+        @types_merger ||= TypesMerger.new
       end
     end
   end
