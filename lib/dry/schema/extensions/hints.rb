@@ -19,17 +19,10 @@ module Dry
       #
       # @api public
       module Or
-        class SinglePath
+        class Abstract
           # @api private
           def hint?
-            false
-          end
-        end
-
-        class MultiPath
-          # @api private
-          def hint?
-            false
+            [left, right].flatten.all?(&:hint?)
           end
         end
       end
@@ -54,6 +47,30 @@ module Dry
     module Extensions
       # @api private
       module Hints
+        def self.select_messages(messages, &block)
+          messages.flatten.flat_map do |message|
+            if message.is_a?(Message::Or::Abstract)
+              select_alternatives(message, &block)
+            else
+              yield(message) ? [message] : EMPTY_ARRAY
+            end
+          end
+        end
+
+        # Keep the disjunction when both alternatives contribute a hint.
+        def self.select_alternatives(message, &block)
+          left = select_messages([message.left], &block)
+          right = select_messages([message.right], &block)
+          return right if left.empty?
+          return left if right.empty?
+
+          if message.is_a?(Message::Or::SinglePath)
+            Message::Or::SinglePath.new(left, right, message.messages)
+          else
+            Message::Or::MultiPath.new(left, right)
+          end
+        end
+        private_class_method :select_alternatives
       end
 
       Compiler.prepend(Hints::CompilerMethods)

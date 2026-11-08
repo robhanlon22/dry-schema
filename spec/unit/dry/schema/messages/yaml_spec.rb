@@ -31,6 +31,14 @@ RSpec.describe Dry::Schema::Messages::YAML do
       end
     end
 
+    it "expands each configured root and keeps the rule name literal" do
+      backend = described_class.build(lookup_paths: ["%<path>s.%<root>s.%<root>s.%<predicate>s"])
+      messages = backend.merge("%<locale>s.en.dry_schema.errors.en.dry_schema.errors.filled?" => "required")
+
+      template, = messages[:filled?, path: "%<locale>s"]
+      expect(template.()).to eql("required")
+    end
+
     context "with no load paths" do
       subject(:messages) do
         Dry::Schema::Messages::YAML.build(load_paths: [])
@@ -67,6 +75,27 @@ RSpec.describe Dry::Schema::Messages::YAML do
         expect(template.(input: "it really")).to eql("it really looks weird")
         expect(meta).to eql(code: "bad")
       end
+    end
+  end
+
+  describe "#rule" do
+    it "looks up the literal name and namespace even if they contain the locale token" do
+      backend = messages.merge(
+        "en.dry_schema.%<locale>s.rules.%<locale>s" => "Literal rule",
+        "en.dry_schema.en.rules.en" => "Locale rule"
+      )
+
+      expect(backend.namespaced("%<locale>s").rule("%<locale>s")).to eql("Literal rule")
+    end
+  end
+
+  describe "#get" do
+    it "expands locale tokens and escaped percent signs in an explicit lookup key" do
+      backend = messages.merge("en.en.tax%" => "Tax")
+      key = "%<locale>s.%<locale>s.tax%%"
+
+      expect(backend.key?(key)).to be(true)
+      expect(backend.get(key).fetch(:text)).to eql("Tax")
     end
   end
 

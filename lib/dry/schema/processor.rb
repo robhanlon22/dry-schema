@@ -142,7 +142,13 @@ module Dry
       #
       # @api private
       def strict_type_schema
-        schema_dsl.strict_type_schema
+        # Coercion keys are omittable. Preserve the presence rules separately
+        # so composed schemas can distinguish a missing key from a coercion failure.
+        required_keys = rules.filter_map do |name, rule|
+          presence = rule.is_a?(::Dry::Logic::Operations::And) ? rule.left : rule
+          name if presence.is_a?(::Dry::Logic::Rule::Predicate) && presence.name == :key?
+        end
+        schema_dsl.strict_type_schema.with(schema_required_keys: required_keys.freeze)
       end
 
       # Return the rule applier

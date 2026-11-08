@@ -211,11 +211,20 @@ RSpec.describe Dry::Schema::Messages::I18n do
         end
 
         it "pluralizes the text of a message with meta-data" do
-          store_errors(inventory: {text: {one: "one item", other: "%{count} items"}, code: 123})
+          store_errors(inventory: {text: {one: "one item", other: "%{count} items"}, code: "%{internal_code}"})
 
           template, = messages[:inventory, path: :inventory]
 
-          expect(template.(count: 2)).to eql("2 items")
+          expect(template.(count: 2, deep_interpolation: true)).to eql("2 items")
+        end
+
+        it "interpolates a scalar in the render locale with the data supplied to the template" do
+          store_errors(inventory: {text: "out of stock", code: 123})
+          I18n.backend.store_translations(:pl, dry_schema: {errors: {inventory: "pozostało %{amount}"}})
+
+          template, = messages[:inventory, path: :inventory, locale: :en, product: "book"]
+
+          expect(template.(locale: :pl, amount: 2)).to eql("pozostało 2")
         end
 
         it "finds the meta-data" do

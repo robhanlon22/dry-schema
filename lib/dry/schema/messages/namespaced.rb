@@ -92,6 +92,16 @@ module Dry
         def translate(key, **args)
           messages.translate(key, **args)
         end
+
+        # @api private
+        def lookup_root(options)
+          messages.lookup_root(options)
+        end
+
+        # @api private
+        def lookup_key?(key, options)
+          messages.lookup_key?(key, options)
+        end
       end
     end
   end

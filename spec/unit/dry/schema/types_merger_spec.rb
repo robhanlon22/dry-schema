@@ -125,6 +125,14 @@ RSpec.describe Dry::Schema::TypesMerger do
           expect(merged.call(bar: 1, baz: nil)).to eq(bar: 1, baz: nil)
         end
 
+        it "retains the right-hand hash constructor when the constructors differ" do
+          left = Types::Params::Hash.schema(x: Types::Params::Integer).constructor { |value| value.merge(x: 7) }
+          right = Types::Params::Hash.schema(x: Types::Params::Integer)
+          merged = types_merger.call(op_class, {options: left}, {options: right}).fetch(:options)
+
+          expect(merged.call(x: "3")).to eq(x: 3)
+        end
+
         it "uses the rhs if the lhs is an Any" do
           expect(
             types_merger

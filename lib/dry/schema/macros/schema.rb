@@ -60,11 +60,11 @@ module Dry
           schema = definition.call
           type_schema =
             if array_type?(parent_type)
-              build_array_type(parent_type, definition.strict_type_schema)
+              build_array_type(parent_type, schema.strict_type_schema)
             elsif redefined_schema?(args)
               parent_type.schema(definition.types)
             else
-              definition.strict_type_schema
+              schema.strict_type_schema
             end
           final_type = optional? ? type_schema.optional : type_schema
 

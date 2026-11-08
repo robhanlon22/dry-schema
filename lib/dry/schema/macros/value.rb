@@ -38,6 +38,10 @@ module Dry
               type(updated_type)
             elsif maybe_type?(current_type)
               type(updated_type.optional)
+            else
+              # A previously declared scalar can still pass its own type rule.
+              # Check the shape before the processor reads keys from it.
+              trace << hash?
             end
           end
 

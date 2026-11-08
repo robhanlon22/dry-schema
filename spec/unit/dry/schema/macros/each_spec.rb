@@ -8,6 +8,13 @@ RSpec.describe Dry::Schema::Macros::Each do
   end
 
   describe "#to_rule" do
+    it "evaluates a predicate block without a schema DSL" do
+      rule = macro.value { str? }.to_rule
+
+      expect(rule.(%w[foo])).to be_success
+      expect(rule.([1])).to be_failure
+    end
+
     it "builds a valid rule with additional predicates" do
       macro.value(:str?, size?: 2..20)
 

@@ -88,16 +88,16 @@ module Dry
           @t = proc { |key, locale: default_locale| get("%<locale>s.#{key}", locale: locale) }
         end
 
-        # Get an array of looked up paths
+        # Resolve the configured root before inserting rule names or namespaces.
         #
-        # @param [Symbol] predicate
-        # @param [Hash] options
-        #
-        # @return [String]
-        #
-        # @api public
-        def looked_up_paths(predicate, options)
-          super.map { |path| evaluated_key(path, options) }
+        # @api private
+        def lookup_root(options)
+          evaluated_key(root, options)
+        end
+
+        # @api private
+        def lookup_key?(key, _options)
+          data.key?(key)
         end
 
         # Get a message for the given key and its options
@@ -109,7 +109,7 @@ module Dry
         #
         # @api public
         def get(key, options = EMPTY_HASH)
-          data[evaluated_key(key, options)]
+          data.fetch(key) { data[evaluated_key(key, options)] }
         end
 
         # Check if given key is defined
@@ -118,7 +118,7 @@ module Dry
         #
         # @api public
         def key?(key, options = EMPTY_HASH)
-          data.key?(evaluated_key(key, options))
+          data.key?(key) || data.key?(evaluated_key(key, options))
         end
 
         # Merge messages from an additional path
@@ -201,7 +201,7 @@ module Dry
         def evaluated_key(key, options)
           return key unless key.include?(LOCALE_TOKEN)
 
-          key.sub(LOCALE_TOKEN) { options[:locale] || default_locale }
+          key.gsub(/%%|%<locale>s/) { |token| token == LOCALE_TOKEN ? options[:locale] || default_locale : "%" }
         end
       end
     end

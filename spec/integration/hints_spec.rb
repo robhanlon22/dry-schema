@@ -145,6 +145,30 @@ RSpec.describe "Validation hints" do
     end
   end
 
+  context "with nested schema alternatives" do
+    subject(:schema) do
+      number = Dry::Schema.define { required(:size).filled(:integer, gt?: 1) }
+      text = Dry::Schema.define { required(:size).filled(:string, size?: 4) }
+      age = Dry::Schema.define { required(:age).filled(:integer, lt?: 99) }
+      Dry::Schema.define { required(:item) { (number | text) | age } }
+    end
+
+    it "renders hints from each alternative when the parent key is missing" do
+      result = schema.({})
+      alternatives = {or: [{size: ["must be greater than 1 or size must be 4"]},
+                           {age: ["must be less than 99"]}]}
+
+      expect(result.hints.to_h).to eql(item: alternatives)
+      expect(result.messages.to_h).to eql(item: [["is missing"], alternatives])
+    end
+
+    it "omits alternatives that have failures but no hints" do
+      result = schema.(item: {size: false, age: 100})
+
+      expect(result.hints.to_h).to eql(item: {size: ["must be greater than 1 or size must be 4"]})
+    end
+  end
+
   context "when the message uses input value" do
     subject(:schema) do
       Dry::Schema.define do

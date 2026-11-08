@@ -103,6 +103,58 @@ RSpec.describe Dry::Schema::Params do
     )
   end
 
+  it "coerces a nested OR with one whole alternative" do
+    integers = Dry::Schema.Params do
+      required(:options).hash do
+        required(:x).filled(:integer)
+        required(:y).filled(:integer)
+      end
+    end
+    strings = Dry::Schema.Params do
+      required(:options).hash do
+        required(:x).filled(:string)
+        required(:y).filled(:string)
+      end
+    end
+    schema = Dry::Schema.Params { required(:query).schema(integers | strings) }
+
+    result = schema.call("query" => {"options" => {"x" => "1", "y" => "abc"}})
+    expect(result).to be_success
+    expect(result.to_h).to eq(query: {options: {x: "1", y: "abc"}})
+  end
+
+  it "keeps keys supplied by defaults in a nested OR projection" do
+    defaults = Dry::Schema.Params do
+      required(:options).hash do
+        required(:nested).hash { required(:x).filled(Types::Params::Integer.default(1)) }
+      end
+    end
+    supplied = Dry::Schema.Params do
+      required(:options).hash do
+        required(:nested).hash { required(:y).filled(:integer, gt?: 10) }
+      end
+    end
+    schema = Dry::Schema.Params { required(:query).schema(defaults | supplied) }
+
+    result = schema.call(query: {options: {nested: {y: "3"}}})
+    expect(result).to be_success
+    expect(result.to_h).to eq(query: {options: {nested: {x: 1}}})
+  end
+
+  it "preserves a valid empty projection from the first alternative" do
+    empty = Dry::Schema.Params do
+      required(:options).value(:hash, size?: 0).hash { optional(:x).filled(:integer) }
+    end
+    supplied = Dry::Schema.Params do
+      required(:options).hash { required(:y).filled(:integer, gt?: 10) }
+    end
+    schema = Dry::Schema.Params { required(:query).schema(empty | supplied) }
+
+    result = schema.call(query: {options: {y: "3"}})
+    expect(result).to be_success
+    expect(result.to_h).to eq(query: {options: {}})
+  end
+
   it "retains nullable collections and their coercion order across OR branches", :aggregate_failures do
     schema_with_rows = Dry::Schema.Params do
       required(:options).hash { required(:count).filled(:integer) }
@@ -246,6 +298,20 @@ RSpec.describe Dry::Schema::Params do
       expect(result.to_h).to eq(item: {value: 1})
       expect(schema.call(item: {value: "one"}).errors.to_h).to eq(item: {value: ["must be an integer"]})
     end
+  end
+
+  it "coerces nested keys of a nullable hash alternative in an implication" do
+    left = Dry::Schema.Params { required(:value).hash { required(:a).filled(:integer) } }
+    hash = Types::Params::Hash.schema(id: Types::Params::Integer)
+    right = Dry::Schema.Params { required(:value).value((Types::Params::Integer | Types::Params::Nil) | hash) }
+    schema = Dry::Schema.Params do
+      config.validate_keys = true
+      required(:item).schema(left.then(right))
+    end
+
+    result = schema.call("item" => {"value" => {"id" => "4"}})
+    expect(result).to be_success
+    expect(result.to_h).to eq(item: {value: {id: 4}})
   end
 
   context "with an array with deeply nested hashes that need coercion" do

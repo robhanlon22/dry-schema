@@ -107,8 +107,13 @@ module Dry
 
           if key?(text_key, opts)
             # A fallback locale can have a text subkey even when this locale has a plain string.
-            entry = t.(key, **options, locale: opts[:locale])
+            # Inspect the parent before pluralizing or interpolating its metadata.
+            parent_options = opts.dup
+            parent_options[:count] = nil if opts[:count]
+            parent_options[:deep_interpolation] = false if opts[:deep_interpolation]
+            entry = t.(key, **parent_options)
             return t.(text_key, **opts) if entry.is_a?(::Hash) && entry.key?(:text)
+            return entry if parent_options == opts && entry.is_a?(::String)
           end
 
           result = t.(key, **opts)

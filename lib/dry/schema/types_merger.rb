@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "dry/types"
 require "dry/schema/optional_type"
 
 module Dry
@@ -13,6 +14,63 @@ module Dry
         lhs.merge(rhs) do |_, left, right|
           merger ||= ValueMerger.new(op_class)
           merger.call(left, right)
+        end
+      end
+
+      # Open schemas can coerce successfully while dropping all the keys of
+      # another branch. Try that branch when the first projection is missing a
+      # required DSL key. Keep whole projections, including arrays of hashes.
+      #
+      # @api private
+      class Alternatives < ::Dry::Types::Sum
+        attr_reader :key_type
+
+        def initialize(left, right, key_type:, **options)
+          @key_type = key_type
+          super(left, right, key_type: key_type, **options)
+        end
+
+        # dry-types' printer dispatches on exact composition classes.
+        def to_s = (left | right).to_s
+        alias_method :inspect, :to_s
+
+        def call_safe(input, &block) = coerce(input) { right.call_safe(input, &block) }
+        def call_unsafe(input) = coerce(input) { right.call_unsafe(input) }
+
+        def try(input, &block)
+          first = left.try(input) { return right.try(input, &block) }
+          return first unless missing_key?(left, first.input)
+
+          second = right.try(input) { return first }
+          missing_key?(right, second.input) ? first : second
+        end
+
+        private
+
+        def coerce(input)
+          first = left.call_safe(input) { return yield }
+          return first unless missing_key?(left, first)
+
+          second = right.call_safe(input) { return first }
+          missing_key?(right, second) ? first : second
+        end
+
+        def missing_key?(type, input)
+          return unless input.is_a?(::Hash) || input.is_a?(::Array)
+
+          type = OptionalType[type]&.value_type || type
+
+          if type.is_a?(Alternatives)
+            missing_key?(type.left, input) && missing_key?(type.right, input)
+          elsif input.is_a?(::Hash) && type.respond_to?(:name_key_map)
+            type.options.fetch(:schema_required_keys, EMPTY_ARRAY).any? { |key| !input.key?(key) } ||
+              input.any? do |name, value|
+                key = type.name_key_map[name]
+                key && missing_key?(key.type, value)
+              end
+          elsif input.is_a?(::Array) && type.respond_to?(:member)
+            input.any? { |value| missing_key?(type.member, value) }
+          end
         end
       end
 
@@ -36,7 +94,8 @@ module Dry
           return left if left == right
 
           if @operator == :|
-            merge_collection(left, right) || (left | right)
+            key_type = merge_collection(key_type(left), key_type(right))
+            key_type ? Alternatives.new(left, right, key_type: key_type) : (left | right)
           else
             merge_ordered(left, right)
           end
@@ -44,11 +103,15 @@ module Dry
 
         private
 
+        def key_type(type)
+          type.is_a?(Alternatives) ? type.key_type : type
+        end
+
         # Rebuild nested collections using the existing constructors. Scalar
         # arrays fall back to the operation on the arrays as a whole.
         def merge_collection(left, right)
           if left.respond_to?(:name_key_map) && right.respond_to?(:name_key_map)
-            return if @operator == :| && !compatible_alternatives?(left, right)
+            return unless mergeable_hashes?(left, right)
 
             keys = left.name_key_map.merge(right.name_key_map) do |name, lkey, rkey|
               type = call(lkey.type, rkey.type)
@@ -65,11 +128,21 @@ module Dry
           end
         end
 
-        # An open schema can accept a hash and discard all of its keys before
-        # a later OR branch sees them. Combining the keys is safe only when
-        # neither schema requires or supplies keys and both coerce the same way.
-        def compatible_alternatives?(left, right)
-          open_schema?(left) && open_schema?(right) && same_coercer?(left.clear, right.clear)
+        def mergeable_hashes?(left, right)
+          if @operator == :|
+            return false unless open_schema?(left) && open_schema?(right)
+          elsif left.is_a?(::Dry::Types::Schema) && right.is_a?(::Dry::Types::Schema)
+            return true
+          end
+
+          # An ordered merge with different constructors uses the right-hand
+          # type as a whole, as it does for scalar types.
+          same_coercer?(hash_coercer(left), hash_coercer(right))
+        end
+
+        def hash_coercer(type)
+          type = type.type while type.is_a?(::Dry::Types::Constrained)
+          type.clear.with(schema_required_keys: nil)
         end
 
         def open_schema?(schema)
@@ -79,16 +152,10 @@ module Dry
         def merge_optional_collection(left, right)
           lhs = OptionalType[left]
           rhs = OptionalType[right]
-          optional = lhs || rhs
-          return unless optional
+          return unless lhs || rhs
           return if lhs && rhs && !same_coercer?(lhs.nil_type, rhs.nil_type)
 
-          value = merge_collection(lhs&.value_type || left, rhs&.value_type || right)
-          return unless value
-
-          # A Params empty string can coerce to nil or an empty collection.
-          # Keep whichever coercer the first alternative would have tried first.
-          optional.with_value(value, nil_first: lhs && lhs.nil_first?).meta(value.meta.merge(maybe: true))
+          merge_collection(lhs&.value_type || left, rhs&.value_type || right)
         end
 
         # DSL key metadata does not change a type's coercion.

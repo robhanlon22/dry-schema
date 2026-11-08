@@ -12,7 +12,6 @@ module Dry
         UnknownConversionError = ::Class.new(::StandardError)
 
         IDENTITY = ->(v) { v }.freeze
-        TO_INTEGER = ->(v) { v.to_i }.freeze
 
         PREDICATE_TO_TYPE = {
           array?: {type: "array"},
@@ -26,16 +25,13 @@ module Dry
           nil?: {type: "null"},
           str?: {type: "string"},
           time?: {type: "string", format: "time"},
-          min_size?: {minLength: TO_INTEGER},
-          max_size?: {maxLength: TO_INTEGER},
-          size?: {maxLength: TO_INTEGER, minLength: TO_INTEGER},
           format?: {
             pattern: proc do |x|
               x.to_s.delete_prefix("(?-mix:").delete_suffix(")")
             end
           },
-          true?: {},
-          false?: {},
+          true?: {const: true},
+          false?: {const: false},
           included_in?: {enum: ->(v) { v.to_a }},
           eql?: {const: IDENTITY},
           uri?: {format: "uri"},
@@ -71,10 +67,11 @@ module Dry
           even?: {type: "integer", multipleOf: 2}
         }.freeze
 
-        ARRAY_PREDICATES = PREDICATE_TO_TYPE.merge(
-          min_size?: {minItems: TO_INTEGER},
-          max_size?: {maxItems: TO_INTEGER}
-        ).freeze
+        SIZE_KEYWORDS = {
+          "string" => [:minLength, :maxLength],
+          "array" => [:minItems, :maxItems],
+          "object" => [:minProperties, :maxProperties]
+        }.freeze
 
         # @api private
         def initialize(loose: false)
@@ -128,22 +125,46 @@ module Dry
 
         def visit_or(node, target, options)
           options = options.merge(type: target[:type] || options[:type])
-          alternatives = node.map do |child|
-            branch = {}
-            visit(child, branch, options)
-            branch
-          end
-
-          if target.key?(:anyOf)
-            (target[:allOf] ||= []) << {anyOf: alternatives}
-          else
-            target[:anyOf] = alternatives
-          end
+          alternatives = node.map { |child| subschema(child, options) }
+          merge_opts!(target, {anyOf: alternatives})
         end
 
         def visit_implication(node, target, options)
-          options = options.merge(required: false)
-          node.each { |child| visit(child, target, options) }
+          condition, rule = node
+
+          if condition.first == :predicate && condition.last.first == :key?
+            visit(condition, target, options)
+            visit(rule, target, options.merge(required: false))
+          elsif condition.first == :predicate && condition.last.first == :array? && rule.first == :each
+            # JSON Schema applies items only to arrays.
+            visit(rule, target, options)
+          elsif condition.first == :not && condition.last.dig(1, 0) == :nil?
+            # The maybe macro emits !nil? > rule.
+            merge_opts!(target, nullable(subschema(rule, options)))
+          else
+            options = options.merge(type: target[:type] || options[:type])
+            inverse = negated(condition, options)
+            return if inverse.empty?
+
+            type = inverse[:not][:type]
+            options = options.merge(type: type) if type
+            merge_opts!(target, {anyOf: [inverse, subschema(rule, options)]})
+          end
+        end
+
+        def nullable(schema)
+          # These keywords can reject null even when the type includes it.
+          if schema[:type] && %i[const enum not anyOf allOf].none? { |key| schema.key?(key) }
+            schema.merge(type: ["null", *schema[:type]].uniq)
+          else
+            {anyOf: [{type: "null"}, schema]}
+          end
+        end
+
+        def subschema(node, options)
+          schema = {}
+          visit(node, schema, options)
+          schema
         end
 
         def visit_each(node, target, options)
@@ -154,12 +175,21 @@ module Dry
         def visit_key(node, target, options)
           name, rule = node
           target.fetch(:required) << name.to_s if options.fetch(:required, true)
-          visit(rule, target.fetch(:properties).fetch(name))
+          visit(rule, target.fetch(:properties).fetch(name), options.except(:required, :type))
         end
 
         def visit_not(node, target, options)
-          _kind, predicate = node
-          visit_predicate(predicate, target, options)
+          options = options.merge(type: target[:type] || options[:type])
+          merge_opts!(target, negated(node, options))
+        end
+
+        def negated(node, options)
+          # Dropping an unknown condition inside NOT would make it more restrictive.
+          {not: subschema(node, options.merge(strict: true))}
+        rescue UnknownConversionError
+          raise if !loose? || options[:strict]
+
+          EMPTY_HASH
         end
 
         def visit_predicate(node, target, options)
@@ -168,38 +198,55 @@ module Dry
             target.fetch(:properties)[args.first.last] = {}
           else
             type = target[:type] || options[:type]
-            merge_opts!(target, predicate_options(name, args, type))
+            merge_opts!(target, predicate_options(name, args, type, options[:strict]))
           end
         end
 
-        def predicate_options(name, args, type)
+        def predicate_options(name, args, type, strict)
           return fetch_filled_options(type) if name == :filled?
 
-          predicates = type&.include?("array") ? ARRAY_PREDICATES : PREDICATE_TO_TYPE
-          options = predicates.fetch(name) do
-            raise_unknown_conversion_error!(:predicate, name) unless loose?
+          if %i[min_size? max_size? size?].include?(name)
+            # Ruby measures integer storage in bytes. JSON has no such constraint to negate.
+            if strict && Array(type).include?("integer")
+              raise_unknown_conversion_error!(:predicate, name)
+            end
+            return size_options(name, args.first.last.to_i, type)
+          end
+
+          options = PREDICATE_TO_TYPE.fetch(name) do
+            raise_unknown_conversion_error!(:predicate, name) if strict || !loose?
             EMPTY_HASH
           end
           options.transform_values { |v| v.respond_to?(:call) ? v.call(args.first.last) : v }
         end
 
+        def size_options(name, value, type)
+          dimensions = type ? Array(type).filter_map { |t| SIZE_KEYWORDS[t] } : SIZE_KEYWORDS.values
+          dimensions.each_with_object({}) do |(min, max), sizes|
+            sizes[min] = value unless name == :max_size?
+            sizes[max] = value unless name == :min_size?
+          end
+        end
+
         def fetch_filled_options(type)
           return {minLength: 1} if type == "string"
+          return {minItems: 1} if type == "array"
+          return {minProperties: 1} if type == "object"
+          return {not: {enum: [nil, "", [], {}]}} if !type || type.is_a?(::Array)
 
-          raise_unknown_conversion_error!(:type, :array) if type == "array" && !loose?
           {not: {type: "null"}}
         end
 
         # @api private
-        def merge_opts!(orig_opts, new_opts)
-          new_type = new_opts[:type]
-          orig_type = orig_opts[:type]
-
-          if orig_type && new_type && orig_type != new_type
-            new_opts[:type] = [orig_type, new_type].flatten.uniq
+        def merge_opts!(target, constraints)
+          constraints.each do |keyword, value|
+            if !target.key?(keyword)
+              target[keyword] = value
+            elsif target[keyword] != value
+              # Both constraints must hold, even when they use the same keyword.
+              (target[:allOf] ||= []) << {keyword => value}
+            end
           end
-
-          orig_opts.merge!(new_opts)
         end
 
         # @api private

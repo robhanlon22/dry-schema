@@ -70,6 +70,97 @@ RSpec.describe "Params / Macros / array" do
     expect(result.errors.to_h).to eq(rows: {1 => {0 => {id: ["must be an integer"]}}})
   end
 
+  it "coerces each alternative in a member block independently" do
+    schema = Dry::Schema.Params do
+      config.validate_keys = true
+      required(:rows).array do
+        array(:integer) | hash { required(:id).filled(:integer) }
+      end
+    end
+
+    result = schema.call("rows" => [["2"], {"id" => "3"}])
+
+    expect(result).to be_success
+    expect(result.to_h).to eq(rows: [[2], {id: 3}])
+  end
+
+  it "keeps nested keys when a predicate allows nil members" do
+    schema = Dry::Schema.Params do
+      required(:rows).array { nil? | hash { required(:id).filled(:integer) } }
+    end
+
+    result = schema.call(rows: [nil, {"id" => "3"}])
+
+    expect(result).to be_success
+    expect(result.to_h).to eq(rows: [nil, {id: 3}])
+  end
+
+  it "retains both sides of a member conjunction inside an alternative" do
+    %i[Params JSON].each do |processor|
+      schema = Dry::Schema.public_send(processor) do
+        required(:rows).array do
+          (hash { required(:a).filled(:integer) } & hash { required(:b).filled(:string) }) |
+            hash { required(:c).filled(:integer) }
+        end
+      end
+
+      result = schema.call("rows" => [{"c" => 2}, {"a" => 3, "b" => "ok"}])
+
+      expect(result).to be_success
+      expect(result.to_h).to eq(rows: [{c: 2}, {a: 3, b: "ok"}])
+    end
+  end
+
+  it "retains invalid optional fields when a member matches both key shapes" do
+    left = Dry::Schema.Params do
+      required(:kind).value(eql?: "left")
+      required(:ctx).filled
+    end
+    right = Dry::Schema.Params do
+      required(:kind).value(eql?: "right")
+      optional(:qty).filled(:integer)
+    end
+    schema = Dry::Schema.Params { required(:rows).array { hash(left) | hash(right) } }
+
+    expect(schema.call(rows: [{kind: "right", qty: "2"}]).to_h).to eq(rows: [{kind: "right", qty: 2}])
+    expect(schema.call(rows: [{kind: "right", qty: "bad", ctx: true}])).to be_failure
+  end
+
+  it "retains an explicit member constructor when the block allows alternatives" do
+    lowercase = Types::String.constructor(&:downcase)
+    schema = Dry::Schema.Params do
+      required(:values).array(lowercase) { value(:string) | value(:integer) }
+    end
+
+    result = schema.call(values: %w[ABC 23])
+
+    expect(result).to be_success
+    expect(result.to_h).to eq(values: %w[abc 23])
+  end
+
+  it "reports a shape error when a scalar member is passed to a nested schema or each" do
+    item = Dry::Schema.Params { required(:id).filled(:integer) }
+    schema = Dry::Schema.Params do
+      required(:maps).array(:integer) { value(item) }
+      required(:lists).array(:integer) { each { filled(:integer) } }
+    end
+
+    result = schema.call(maps: ["1"], lists: ["2"])
+
+    expect(result.to_h).to eq(maps: [1], lists: [2])
+    expect(result.errors.to_h).to eq(maps: {0 => ["must be a hash"]}, lists: {0 => ["must be an array"]})
+  end
+
+  it "applies each only to the array alternative of a sum" do
+    type = Types::Params::Nil | Types::Params::Array
+    schema = Dry::Schema.Params { required(:rows).value(type).each { filled(:integer) } }
+
+    expect(schema.call(rows: "").to_h).to eq(rows: nil)
+    expect(schema.call(rows: nil)).to be_success
+    expect(schema.call(rows: ["2"]).to_h).to eq(rows: [2])
+    expect(schema.call(rows: "invalid")).to be_failure
+  end
+
   context "when inherited" do
     subject(:schema) do
       Dry::Schema.Params(parent: parent) do

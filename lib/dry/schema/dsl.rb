@@ -473,7 +473,11 @@ module Dry
       #
       # @api private
       def key_spec(name, type, array_depth = 0)
-        if type.respond_to?(:keys)
+        if type.is_a?(TypesMerger::Alternatives)
+          key_spec(name, type.key_type, array_depth)
+        elsif type.is_a?(::Dry::Types::Implication)
+          key_spec(name, type.right, array_depth)
+        elsif type.respond_to?(:keys)
           members = key_map(type.name_key_map)
           array_depth.zero? ? {name => members} : Key::Array[name, member: members, depth: array_depth]
         elsif type.respond_to?(:member)

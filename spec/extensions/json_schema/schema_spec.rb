@@ -121,6 +121,16 @@ RSpec.describe Dry::Schema::JSON, "#json_schema" do
     end
   end
 
+  it "accepts nil for a maybe value with an enum constraint" do
+    schema = Dry::Schema.JSON do
+      required(:color).maybe(:string, included_in?: %w[red blue])
+    end
+    validator = JSONSchemer.schema(schema.json_schema)
+
+    expect([nil, "red", "green"].select { |color| validator.valid?({"color" => color}) })
+      .to eq([nil, "red"])
+  end
+
   context "when using maybe array types" do
     include_examples "metaschema validation"
 
@@ -203,6 +213,29 @@ RSpec.describe Dry::Schema::JSON, "#json_schema" do
       expect(validator.valid?({"name" => "Jane", "tags" => []})).to be(true)
       expect(validator.valid?({"name" => "", "tags" => []})).to be(false)
       expect(validator.valid?({"name" => "Jane", "tags" => [1, 2]})).to be(false)
+    end
+
+    it "keeps both constraints when predicates produce the same keyword" do
+      schema = Dry::Schema.JSON do
+        required(:name) { (min_size?(3) & filled?) & str? }
+        required(:number) { (int? & filled?) & odd? }
+      end
+      validator = JSONSchemer.schema(schema.json_schema)
+
+      expect(validator.valid?({"name" => "abc", "number" => 3})).to be(true)
+      expect(validator.valid?({"name" => "a", "number" => 3})).to be(false)
+      expect(validator.valid?({"name" => "abc", "number" => 2})).to be(false)
+    end
+
+    it "applies the consequence of an implication only when its condition holds" do
+      schema = Dry::Schema.JSON do
+        required(:value) { array? > size?(2) }
+      end
+      validator = JSONSchemer.schema(schema.json_schema)
+
+      expect(["a", [], [1], [1, 2], [1, 2, 3]].select { |value|
+        validator.valid?({"value" => value})
+      }).to eq(["a", [1, 2]])
     end
 
     it "applies an array constant to the array itself" do
@@ -334,7 +367,7 @@ RSpec.describe Dry::Schema::JSON, "#json_schema" do
         expect(schema.json_schema).to include(
           properties: {
             email: {
-              not: {type: "null"}
+              not: {enum: [nil, "", [], {}]}
             }
           }
         )
@@ -369,10 +402,8 @@ RSpec.describe Dry::Schema::JSON, "#json_schema" do
         end
       end
 
-      it "raises an unknown type conversion error (fix later)" do
-        expect { schema.json_schema }.to raise_error(
-          Dry::Schema::JSONSchema::SchemaCompiler::UnknownConversionError
-        )
+      it "requires at least one item" do
+        expect(schema.json_schema[:properties][:tags]).to eq(type: "array", minItems: 1)
       end
     end
   end
@@ -408,6 +439,29 @@ RSpec.describe Dry::Schema::JSON, "#json_schema" do
         expect { schema.json_schema(loose: true) }.not_to raise_error
       end
     end
+  end
+
+  it "omits negated unsupported predicates in loose mode" do
+    schema = Dry::Schema.JSON do
+      required(:value) { !excluded_from?(["x"]) }
+      required(:conditional) { (str? & excluded_from?(["x"])) > eql?("a") }
+    end
+
+    expect { schema.json_schema }.to raise_error(
+      Dry::Schema::JSONSchema::SchemaCompiler::UnknownConversionError
+    )
+    expect(schema.json_schema(loose: true)[:properties]).to eq(value: {}, conditional: {})
+  end
+
+  it "does not turn a negated Ruby integer storage size into an impossible JSON constraint" do
+    schema = Dry::Schema.JSON do
+      required(:id) { int? & !size?(2) }
+    end
+
+    expect { schema.json_schema }.to raise_error(
+      Dry::Schema::JSONSchema::SchemaCompiler::UnknownConversionError, /size\?/
+    )
+    expect(schema.json_schema(loose: true)[:properties][:id]).to eq(type: "integer")
   end
 
   context "when using enums" do
@@ -558,9 +612,20 @@ RSpec.describe Dry::Schema::JSON, "#json_schema" do
   end
 
   describe "special boolean predicates" do
+    it "negates each boolean constant" do
+      schema = Dry::Schema.JSON do
+        required(:off) { !true? }
+        required(:on) { !false? }
+      end
+      validator = JSONSchemer.schema(schema.json_schema)
+
+      expect(validator.valid?({"off" => false, "on" => true})).to be(true)
+      expect(validator.valid?({"off" => true, "on" => false})).to be(false)
+    end
+
     {
-      true?: {},
-      false?: {}
+      true?: {const: true},
+      false?: {const: false}
     }.each do |type_spec, type_opts|
       describe "type: #{type_spec.inspect}" do
         subject(:schema) do

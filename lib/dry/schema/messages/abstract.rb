@@ -76,7 +76,7 @@ module Dry
         # @api private
         def rule(name, options = {})
           tokens = {name: name, locale: options.fetch(:locale, default_locale)}
-          path = rule_lookup_paths(tokens).detect { |key| key?(key, options) }
+          path = rule_lookup_paths(tokens).detect { |key| lookup_key?(key, options) }
 
           rule = get(path, options) if path
           rule.is_a?(::Hash) ? rule[:text] : rule
@@ -90,7 +90,7 @@ module Dry
         def call(predicate, options)
           options = {locale: default_locale, **options}
           opts = options.reject { |k,| config.lookup_options.include?(k) }
-          path = lookup_paths(predicate, options).detect { |key| key?(key, opts) }
+          path = lookup_paths(predicate, options).detect { |key| lookup_key?(key, opts) }
 
           return unless path
 
@@ -115,6 +115,11 @@ module Dry
         # @api public
         def key?(_key, _options = EMPTY_HASH)
           raise ::NotImplementedError
+        end
+
+        # @api private
+        def lookup_key?(key, options)
+          key?(key, options)
         end
 
         # Retrieve an array of looked up paths
@@ -179,10 +184,16 @@ module Dry
           raise ::NotImplementedError
         end
 
+        # @api private
+        def lookup_root(_options)
+          root
+        end
+
         private
 
         # @api private
         def lookup_tokens(predicate, options)
+          root = lookup_root(options)
           options.merge(
             predicate: predicate,
             root: options[:not] ? "#{root}.not" : root,

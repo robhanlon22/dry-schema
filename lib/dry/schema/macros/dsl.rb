@@ -220,8 +220,8 @@ module Dry
 
         # Evaluate member declarations against their own type slot. Nested
         # macros use the key's name when registering their coercion type.
-        def array_member_block(block)
-          return unless block
+        def array_member_block(block, explicit_member = nil)
+          return block unless block && schema_dsl
 
           container = custom_type? ? schema_dsl.types[name] : schema_dsl.resolve_type(:array)
           # A compound union can also accept nil, e.g. (integer | nil) | array.
@@ -229,15 +229,17 @@ module Dry
           array = optional ? optional.value_type : container
           return block unless array.respond_to?(:of)
 
-          member = array.respond_to?(:member) ? array.member : Types::Any.meta(default: true)
-          member_dsl = schema_dsl.new(
-            path: path, steps: schema_dsl.steps, macros: schema_dsl.macros, types: {name => member}
+          previous = array.member if array.respond_to?(:member)
+          member = explicit_member || previous || Types::Any.meta(default: true)
+          evaluator = ArrayMember.new(
+            name: name, schema_dsl: schema_dsl, member_type: member,
+            chain: false, compiler: schema_dsl.compiler, trace: Trace.new(schema_dsl.compiler)
           )
 
           proc do
-            rule = new(chain: false, schema_dsl: member_dsl).instance_exec(&block)
-            inferred = member_dsl.types.fetch(name)
-            unless inferred.equal?(member)
+            rule = evaluator.instance_exec(&block)
+            inferred = evaluator.inferred_type(rule) || explicit_member
+            if inferred && !inferred.equal?(previous)
               updated = array.of(inferred)
               type(optional ? optional.with_value(updated) : updated)
             end

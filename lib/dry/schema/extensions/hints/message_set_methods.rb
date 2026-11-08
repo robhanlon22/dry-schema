@@ -10,8 +10,10 @@ module Dry
         module MessageSetMethods
           # Filtered message hints from all messages
           #
-          # @return [Array<Message::Hint>]
-          attr_reader :hints
+          # @return [Array<Hint, Message::Or::Abstract>]
+          def hints
+            Hints.select_messages(messages, &:hint?)
+          end
 
           # Configuration option to enable/disable showing errors
           #
@@ -21,7 +23,6 @@ module Dry
           # @api private
           def initialize(messages, options = EMPTY_HASH)
             super
-            @hints = messages.select(&:hint?)
             @failures = options.fetch(:failures, true)
           end
 

@@ -31,32 +31,14 @@ module Dry
 
           # @api private
           def filter(messages, opts)
-            Array(messages).flatten.reject { |msg| exclude?(msg, opts) }.uniq
+            Hints.select_messages([messages]) { |msg| !exclude?(msg, opts) }.uniq
           end
 
           # @api private
-          # rubocop: disable Metrics/AbcSize
-          # rubocop: disable Metrics/PerceivedComplexity
-          # rubocop: disable Metrics/CyclomaticComplexity
-          def exclude?(messages, opts)
-            Array(messages).all? do |msg|
-              hints = opts.hints.reject { |h|
-                msg.eql?(h) || h.predicate.eql?(:filled?)
-              }
-
-              key_failure = opts.key_failure?(msg.path)
-              predicate = msg.predicate
-
-              (HINT_TYPE_EXCLUSION.include?(predicate) && !key_failure) ||
-                (msg.predicate == :filled? && key_failure) ||
-                (!key_failure && HINT_TYPE_EXCLUSION.include?(predicate) &&
-                  !hints.empty? && hints.any? { |hint| hint.path == msg.path }) ||
-                HINT_OTHER_EXCLUSION.include?(predicate)
-            end
+          def exclude?(message, opts)
+            HINT_OTHER_EXCLUSION.include?(message.predicate) ||
+              (HINT_TYPE_EXCLUSION.include?(message.predicate) && !opts.key_failure?(message.path))
           end
-          # rubocop: enable Metrics/CyclomaticComplexity
-          # rubocop: enable Metrics/PerceivedComplexity
-          # rubocop: enable Metrics/AbcSize
 
           # @api private
           def message_type(options)
