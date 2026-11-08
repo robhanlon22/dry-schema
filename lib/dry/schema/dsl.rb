@@ -382,6 +382,9 @@ module Dry
         types_merger.(op_class, lhs, rhs)
       end
 
+      # @api private
+      def schema_alternatives? = !!@schema_alternatives
+
       protected
 
       # Build a rule applier
@@ -473,8 +476,11 @@ module Dry
       #
       # @api private
       def key_spec(name, type, array_depth = 0)
-        if type.is_a?(TypesMerger::Alternatives)
-          key_spec(name, type.key_type, array_depth)
+        if type.is_a?(::Dry::Types::Composition) && type.respond_to?(:key_type)
+          @schema_alternatives = true if type.is_a?(TypesMerger::SchemaAlternatives)
+          left = KeyMap[key_spec(name, type.left, array_depth)]
+          right = KeyMap[key_spec(name, type.right, array_depth)]
+          (left | right).keys.first
         elsif type.is_a?(::Dry::Types::Implication)
           key_spec(name, type.right, array_depth)
         elsif type.respond_to?(:keys)

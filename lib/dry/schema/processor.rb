@@ -76,7 +76,7 @@ module Dry
       # @api public
       def call(input)
         Result.new(input.dup, message_compiler: message_compiler) do |result|
-          steps.call(result)
+          BranchFailures.within(schema_dsl.schema_alternatives?, steps) { steps.call(result) }
         end
       end
       alias_method :[], :call

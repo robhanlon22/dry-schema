@@ -116,12 +116,13 @@ RSpec.describe Dry::Schema::TypesMerger do
           )
         end
 
-        it "merges schema keys and preserves their types" do
+        it "retains the strict hash rule and inherited key types in a merged schema" do
           left = Types::Hash.schema(bar: Types::Integer)
-          right = Types::Hash.schema(baz: Types::Integer.optional)
+          right = Types::Hash.schema(baz: Types::Integer.optional, note?: Types::String)
           merged = types_merger.call(op_class, {foo: left}, {foo: right.optional}).fetch(:foo)
 
-          expect(merged.keys).to eq(left.keys + right.keys)
+          expect(merged.type.rule).to eq(Types::Hash.rule)
+          expect(merged.keys.map(&:type)).to eq(left.keys + right.keys)
           expect(merged.call(bar: 1, baz: nil)).to eq(bar: 1, baz: nil)
         end
 

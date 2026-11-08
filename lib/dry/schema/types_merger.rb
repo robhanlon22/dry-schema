@@ -96,6 +96,8 @@ module Dry
           if @operator == :|
             key_type = merge_collection(key_type(left), key_type(right))
             key_type ? Alternatives.new(left, right, key_type: key_type) : (left | right)
+          elsif SchemaIntersection.needed?(left, right)
+            SchemaIntersection.new(left, right)
           else
             merge_ordered(left, right)
           end
@@ -113,11 +115,7 @@ module Dry
           if left.respond_to?(:name_key_map) && right.respond_to?(:name_key_map)
             return unless mergeable_hashes?(left, right)
 
-            keys = left.name_key_map.merge(right.name_key_map) do |name, lkey, rkey|
-              type = call(lkey.type, rkey.type)
-              ::Dry::Types::Schema::Key.new(type, name, required: lkey.required? || rkey.required?)
-            end
-            left.schema(keys.values)
+            merge_schema(left, right)
           elsif left.respond_to?(:member) && right.respond_to?(:member)
             return unless same_coercer?(left.of(right.member), right)
 
@@ -128,10 +126,34 @@ module Dry
           end
         end
 
+        def merge_schema(left, right)
+          lhs = left.name_key_map
+          rhs = right.name_key_map
+          ordered = ordered_schema?(left, right)
+          keys = (lhs.keys | rhs.keys).map do |name|
+            lkey, rkey = lhs[name], rhs[name]
+            if lkey && rkey && lkey != rkey
+              type = call(lkey.type, rkey.type)
+              ::Dry::Types::Schema::Key.new(type, name, required: lkey.required? || rkey.required?)
+            else
+              key = lkey || rkey
+              # Ordered schemas retain an inherited key as the member type of
+              # the new key. Its requiredness also belongs on the outer key.
+              ordered ? ::Dry::Types::Schema::Key.new(key, name, **key.options) : key
+            end
+          end
+          schema = left.schema(keys)
+          ordered ? schema.constrained(type: ::Hash) : schema
+        end
+
+        def ordered_schema?(left, right)
+          @operator != :| && left.is_a?(::Dry::Types::Schema) && right.is_a?(::Dry::Types::Schema)
+        end
+
         def mergeable_hashes?(left, right)
           if @operator == :|
             return false unless open_schema?(left) && open_schema?(right)
-          elsif left.is_a?(::Dry::Types::Schema) && right.is_a?(::Dry::Types::Schema)
+          elsif ordered_schema?(left, right)
             return true
           end
 
@@ -222,3 +244,5 @@ module Dry
     end
   end
 end
+
+require "dry/schema/types_merger/schema_intersection"

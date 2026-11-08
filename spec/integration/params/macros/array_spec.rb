@@ -111,19 +111,69 @@ RSpec.describe "Params / Macros / array" do
     end
   end
 
-  it "retains invalid optional fields when a member matches both key shapes" do
+  it "coerces hash members using the alternative whose predicates match" do
     left = Dry::Schema.Params do
       required(:kind).value(eql?: "left")
-      required(:ctx).filled
+      optional(:value).filled(:integer)
+      optional(:note).filled(:string)
     end
     right = Dry::Schema.Params do
       required(:kind).value(eql?: "right")
+      optional(:value).filled(:string)
       optional(:qty).filled(:integer)
     end
-    schema = Dry::Schema.Params { required(:rows).array { hash(left) | hash(right) } }
 
-    expect(schema.call(rows: [{kind: "right", qty: "2"}]).to_h).to eq(rows: [{kind: "right", qty: 2}])
-    expect(schema.call(rows: [{kind: "right", qty: "bad", ctx: true}])).to be_failure
+    [left, right].permutation do |first, second|
+      schema = Dry::Schema.Params do
+        required(:rows).array { hash(first) | hash(second) }
+        optional(:groups).array { array(:hash, first) | array(:hash, second) }
+      end
+      rows = [{"kind" => "left", "value" => "2", "note" => "memo"},
+              {"kind" => "right", "value" => "2", "qty" => "3"}]
+      expected = [{kind: "left", value: 2, note: "memo"}, {kind: "right", value: "2", qty: 3}]
+
+      result = schema.call("rows" => rows, "groups" => rows.map { |row| [row] })
+      expect(result).to be_success
+      expect(result.to_h).to eq(rows: expected, groups: expected.map { |row| [row] })
+
+      invalid = {kind: "right", qty: "bad"}
+      expect(schema.call(rows: [invalid], groups: [[invalid]]).errors.to_h.keys).to contain_exactly(:rows, :groups)
+    end
+  end
+
+  it "checks each member predicate against the value coerced by its own branch" do
+    upcase = Types::String.constructor(&:upcase)
+    downcase = Types::String.constructor(&:downcase)
+    upper = Dry::Schema.Params { required(:name).value(upcase, eql?: "abc") }
+    lower = Dry::Schema.Params { required(:name).value(downcase, eql?: "ABC") }
+
+    [upper, lower].permutation do |first, second|
+      schema = Dry::Schema.Params do
+        required(:rows).array { (hash(first) | hash(second)) & hash { required(:count).filled(:integer) } }
+      end
+
+      result = schema.call(rows: [{name: "Abc", count: "2"}])
+      expect(result[:rows].first[:count]).to eq(2)
+      expect(result).to be_failure
+      expect(result.errors.to_h.dig(:rows, 0, :name)).not_to be_empty
+    end
+  end
+
+  it "retains compatible fields from each successful hash alternative" do
+    left, right = %i[x y].map do |key|
+      Dry::Schema.Params do
+        required(:id).filled(:integer)
+        optional(key).filled(:integer)
+      end
+    end
+
+    [left, right].permutation do |first, second|
+      schema = Dry::Schema.Params { required(:rows).value(:array).each { hash(first) | hash(second) } }
+      result = schema.call("rows" => [{"id" => "1", "x" => "2", "y" => "3"}])
+
+      expect(result).to be_success
+      expect(result.to_h).to eq(rows: [{id: 1, x: 2, y: 3}])
+    end
   end
 
   it "retains an explicit member constructor when the block allows alternatives" do

@@ -9,7 +9,7 @@ module Dry
     class KeyValidator
       extend ::Dry::Initializer
 
-      MULTI_INDEX_REGEX = /(\[\d+\])+/
+      MULTI_INDEX_REGEX = /(?:\[\d+\])+/
       INDEX_REGEX = /\[\d+\]/
       DIGIT_REGEX = /\A\d+\z/
       BRACKETS = "[]"
@@ -42,8 +42,8 @@ module Dry
 
       # @api private
       def validate_path(key_paths, path)
-        if path[MULTI_INDEX_REGEX]
-          key = path.gsub(MULTI_INDEX_REGEX, BRACKETS)
+        if path[INDEX_REGEX]
+          key = normalize_indices(path)
           if none_key_paths_match?(key_paths, key)
             arr = path.gsub(INDEX_REGEX) { ".#{_1[1...-1]}" }
             arr.split(DOT).map { DIGIT_REGEX.match?(_1) ? Integer(_1, 10) : _1.to_sym }
@@ -51,6 +51,21 @@ module Dry
         elsif none_key_paths_match?(key_paths, path)
           path
         end
+      end
+
+      def normalize_indices(path)
+        variants = key_map.variant_paths
+        return path.gsub(MULTI_INDEX_REGEX, BRACKETS) if variants.empty? || !path.include?("][")
+
+        normalized = +""
+        offset = 0
+        path.scan(MULTI_INDEX_REGEX) do |indices|
+          match = Regexp.last_match
+          normalized << path[offset...match.begin(0)]
+          normalized << (variants.key?(normalized) ? indices.gsub(INDEX_REGEX, BRACKETS) : BRACKETS)
+          offset = match.end(0)
+        end
+        normalized << path[offset..]
       end
 
       # @api private

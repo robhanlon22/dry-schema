@@ -110,6 +110,9 @@ module Dry
               remaining << child
             end
           end
+          if remaining.size > 1 && remaining.any? { |kind,| kind == :set }
+            options = options.merge(expression: true)
+          end
           remaining.each { |child| visit(child, target, options) }
         end
 
@@ -163,19 +166,37 @@ module Dry
 
         def subschema(node, options)
           schema = {}
-          visit(node, schema, options)
+          visit(node, schema, options.merge(expression: true))
           schema
         end
 
         def visit_each(node, target, options)
           items = (target[:items] ||= {})
-          visit(node, items, options.except(:type))
+          visit(node, items, options.except(:type).merge(expression: true))
         end
 
         def visit_key(node, target, options)
           name, rule = node
           target.fetch(:required) << name.to_s if options.fetch(:required, true)
-          visit(rule, target.fetch(:properties).fetch(name), options.except(:required, :type))
+          property = target.fetch(:properties).fetch(name)
+          standalone = standalone_property(rule) unless options[:expression]
+          standalone ? merge_opts!(property, standalone) : visit(rule, property, options.except(:required, :type))
+        end
+
+        # Standalone properties have historically exported a few predicates
+        # approximately. Boolean expressions need their actual truth conditions.
+        def standalone_property(rule)
+          kind, body = rule
+          if kind == :predicate
+            return EMPTY_HASH if body.first == :true? || body.first == :false?
+            return {not: {type: "null"}} if body.first == :filled?
+          elsif kind == :and && !loose? && body.all? { |child| child.first == :predicate }
+            left, right = body.map { |child| child.last.first }
+            if (left == :array? && right == :filled?) || (left == :filled? && right == :array?)
+              raise_unknown_conversion_error!(:type, :array)
+            end
+          end
+          nil
         end
 
         def visit_not(node, target, options)

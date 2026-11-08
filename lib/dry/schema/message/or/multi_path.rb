@@ -26,15 +26,24 @@ module Dry
               if branch.is_a?(MultiPath) && branch.root == root
                 branch.alternatives
               else
-                # Assemble the branch with its original paths before removing
-                # the prefix shared by all the alternatives.
-                errors = MessageSet[[branch]].to_h
-                [root.keys.empty? ? errors : errors.dig(*root.keys)]
+                [branch_errors(branch)]
               end
             end
           end
 
           private
+
+          def branch_errors(branch)
+            MessageSet[[branch]].merge_messages do |message|
+              # A nested disjunction with its own root retains its absolute
+              # location. Ordinary failures are relative to this alternative.
+              if root.keys.empty? || (message.is_a?(MultiPath) && message.root != root)
+                message.to_h
+              else
+                message.to_h.dig(*root.keys)
+              end
+            end
+          end
 
           def branches
             @branches ||= [left, right].each do |branch|

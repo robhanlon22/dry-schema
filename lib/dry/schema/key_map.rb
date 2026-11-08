@@ -28,6 +28,7 @@ module Dry
       #   KeyMap[:title, :artist, tags: [:name]]
       #   KeyMap[:title, :artist, [:tags]]
       #   KeyMap[[:rows, [:id], 2]] # arrays of arrays of hashes with an :id key
+      #   KeyMap[[:item, {0 => [:id], 1 => [:name]}]] # a hash or an array of hashes
       #
       # @return [KeyMap]
       #
@@ -56,7 +57,11 @@ module Dry
             Key::Hash[root, members: KeyMap[*rest]]
           when Array
             root, rest = key
-            Key::Array[root, member: KeyMap[*rest], depth: key.fetch(2, 1)]
+            if rest.is_a?(Hash) && !rest.empty? && rest.keys.all? { |depth| depth.is_a?(Integer) && depth >= 0 }
+              Key::Variants[root, shapes: rest.transform_values { |members| KeyMap[*members] }]
+            else
+              Key::Array[root, member: KeyMap[*rest], depth: key.fetch(2, 1)]
+            end
           when Key
             key
           else
@@ -103,6 +108,20 @@ module Dry
         @to_dot_notation ||= map(&:to_dot_notation).flatten
       end
 
+      # Only alternatives with competing array depths need the raw input's
+      # exact dimensions. Ordinary array constructors may flatten their input.
+      # @api private
+      def variant_paths
+        @variant_paths ||= each_with_object({}) do |key, paths|
+          paths[key.name.to_s] = true if key.is_a?(Key::Variants)
+          key.shapes.each do |depth, members|
+            depth = 1 if depth.positive? && !key.is_a?(Key::Variants)
+            prefix = key.name.to_s + "[]" * depth + DOT
+            members.variant_paths.each_key { |path| paths[prefix + path] = true }
+          end
+        end
+      end
+
       # Iterate over keys
       #
       # @api public
@@ -117,6 +136,14 @@ module Dry
       # @return [KeyMap]
       def +(other)
         self.class.new(keys + other.to_a)
+      end
+
+      # Normalize the nested keys admitted by either alternative.
+      # @api private
+      def |(other)
+        lhs = keys.to_h { |key| [key.id, key] }
+        rhs = other.to_h { |key| [key.id, key] }
+        self.class.new(lhs.merge(rhs) { |_, left, right| left | right }.values)
       end
 
       # Return a string representation of a key map

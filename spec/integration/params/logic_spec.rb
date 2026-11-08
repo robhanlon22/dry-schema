@@ -103,6 +103,105 @@ RSpec.describe Dry::Schema::Params do
     )
   end
 
+  it "uses the coercions and optional keys of the matching schema in either order" do
+    integer = Dry::Schema.Params do
+      required(:kind).value(eql?: "integer")
+      required(:value).filled(:integer)
+      optional(:count).filled(:integer)
+    end
+    string = Dry::Schema.Params do
+      required(:kind).value(eql?: "string")
+      required(:value).filled(:string)
+      optional(:note).filled(:string)
+    end
+
+    [integer | string, string | integer].each do |operation|
+      schema = Dry::Schema.Params { required(:row).schema(operation) }
+      result = schema.call("row" => {"kind" => "integer", "value" => "2", "count" => "3", "note" => "ignored"})
+      expect(result).to be_success
+      expect(result[:row]).to eq(kind: "integer", value: 2, count: 3)
+    end
+  end
+
+  it "combines compatible fields across a chain of successful alternatives" do
+    a, b, c = %i[a b c].map do |key|
+      Dry::Schema.Params do
+        conditions = key == :c ? {} : {size?: 1}
+        required(:fields).value(:hash, **conditions).hash { required(key).filled(:integer) }
+      end
+    end
+    [a | (b | c), (a | b) | c, c | (b | a)].each do |operation|
+      schema = Dry::Schema.Params { required(:record).schema(operation) }
+      result = schema.call(record: {fields: {a: "1", b: "2", c: "3"}})
+
+      expect(result).to be_success
+      expect(result[:record]).to eq(fields: {a: 1, b: 2, c: 3})
+    end
+  end
+
+  it "keeps failures local to the call and revalidates values changed by callbacks" do
+    up = Dry::Schema.Params do
+      required(:v).value(Types::String.constructor(&:upcase), eql?: "mixed")
+    end
+    down = Dry::Schema.Params do
+      required(:v).value(Types::String.constructor(&:downcase), eql?: "MIXED")
+    end
+    nested = Dry::Schema.Params { required(:row).schema(up | down) }
+    schema = Dry::Schema.Params do
+      required(:row).schema(up | down)
+      optional(:replace).value(:bool)
+      after(:value_coercer) do |result|
+        nested.call(row: {v: "mIxEd"})
+        result[:row][:v].replace("mixed") if result[:replace]
+        nil
+      end
+    end
+
+    expect(schema.call(row: {v: "mIxEd"}).errors.to_h).to eq(
+      row: {v: ["must be equal to mixed or must be equal to MIXED"]}
+    )
+    expect(schema.call(row: {v: "mIxEd"}, replace: true)).to be_success
+  end
+
+  it "retains the selected OR projection inside a conjunction or implication" do
+    tagged = %w[left right].map do |tag|
+      Dry::Schema.Params do
+        required(:record).hash do
+          required(:kind).value(eql?: tag)
+          optional(tag.to_sym).filled(:integer)
+        end
+      end
+    end
+    common = Dry::Schema.Params { required(:record).hash { required(:active).filled(:bool) } }
+
+    tagged.permutation do |left, right|
+      op = left | right
+      [op & common, common & op, common > op].each do |operation|
+        schema = Dry::Schema.Params { required(:recording).schema(operation) }
+        result = schema.call(recording: {record: {kind: "right", right: "2", active: "true"}})
+
+        expect(result).to be_success
+        expect(result.to_h).to eq(recording: {record: {kind: "right", right: 2, active: true}})
+      end
+    end
+  end
+
+  it "revalidates a domain object mutated by a callback" do
+    cell = Struct.new(:state)
+    left, right = %i[x y].map do |key|
+      Dry::Schema.Params do
+        required(:v).value(eql?: cell.new(:ready))
+        optional(key).filled(:integer)
+      end
+    end
+    schema = Dry::Schema.Params do
+      required(:row).schema(left | right)
+      after(:value_coercer) { |result| result[:row][:v].state = :ready }
+    end
+
+    expect(schema.call(row: {v: cell.new(:waiting), x: 1, y: 2})).to be_success
+  end
+
   it "coerces a nested OR with one whole alternative" do
     integers = Dry::Schema.Params do
       required(:options).hash do
@@ -168,7 +267,7 @@ RSpec.describe Dry::Schema::Params do
     end
     alternatives = nullable_schemas.reduce(:|)
 
-    [[schema_with_rows | alternatives, []], [alternatives | schema_with_rows, nil]].each do |operation, empty_rows|
+    [schema_with_rows | alternatives, alternatives | schema_with_rows].each do |operation|
       schema = Dry::Schema.Params do
         config.validate_keys = true
         required(:query).schema(operation)
@@ -181,7 +280,7 @@ RSpec.describe Dry::Schema::Params do
         expect(result.to_h).to eq(query: {options: {key => 2}, rows: [{key => 2}]})
       end
       expect(schema.call(query: {options: nil, rows: nil})).to be_success
-      expect(schema.call(query: {options: nil, rows: ""}).to_h).to eq(query: {options: nil, rows: empty_rows})
+      expect(schema.call(query: {options: nil, rows: ""}).to_h).to eq(query: {options: nil, rows: nil})
     end
   end
 

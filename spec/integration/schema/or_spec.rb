@@ -398,53 +398,61 @@ RSpec.describe Dry::Schema, "OR messages" do
           0 => {
             or: [
               {
-                foos: {
+                bars: {
                   0 => {
-                    or: [
-                      {value: ["is missing"]},
-                      {
-                        type: ["must be one of: foo_1"],
-                        value: ["is missing"]
-                      },
-                      {
-                        type: ["must be one of: foo_2"],
-                        value: ["is missing"]
-                      },
-                      {
-                        type: ["must be one of: foo_3"],
-                        value: ["is missing"]
-                      },
-                      {
-                        type: ["must be one of: foo_4"],
-                        value: ["is missing"]
+                    foos: {
+                      0 => {
+                        or: [
+                          {value: ["is missing"]},
+                          {
+                            type: ["must be one of: foo_1"],
+                            value: ["is missing"]
+                          },
+                          {
+                            type: ["must be one of: foo_2"],
+                            value: ["is missing"]
+                          },
+                          {
+                            type: ["must be one of: foo_3"],
+                            value: ["is missing"]
+                          },
+                          {
+                            type: ["must be one of: foo_4"],
+                            value: ["is missing"]
+                          }
+                        ]
                       }
-                    ]
+                    }
                   }
                 }
               },
               {bazes: ["is missing"], type: ["must be one of: bar_2"]},
               {
-                foos: {
+                bars: {
                   0 => {
-                    or: [
-                      {value: ["is missing"]},
-                      {
-                        type: ["must be one of: foo_1"],
-                        value: ["is missing"]
-                      },
-                      {
-                        type: ["must be one of: foo_2"],
-                        value: ["is missing"]
-                      },
-                      {
-                        type: ["must be one of: foo_3"],
-                        value: ["is missing"]
-                      },
-                      {
-                        type: ["must be one of: foo_4"],
-                        value: ["is missing"]
+                    foos: {
+                      0 => {
+                        or: [
+                          {value: ["is missing"]},
+                          {
+                            type: ["must be one of: foo_1"],
+                            value: ["is missing"]
+                          },
+                          {
+                            type: ["must be one of: foo_2"],
+                            value: ["is missing"]
+                          },
+                          {
+                            type: ["must be one of: foo_3"],
+                            value: ["is missing"]
+                          },
+                          {
+                            type: ["must be one of: foo_4"],
+                            value: ["is missing"]
+                          }
+                        ]
                       }
-                    ]
+                    }
                   }
                 },
                 type: ["must be one of: bar_3"]

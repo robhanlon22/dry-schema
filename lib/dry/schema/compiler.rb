@@ -20,6 +20,12 @@ module Dry
         super.with(hints: false)
       end
 
+      # @api private
+      def visit_or(node)
+        left, right = node
+        BranchFailures::Or.new(visit(left), visit(right), branches: node)
+      end
+
       # Build a special rule that will produce namespaced failures
       #
       # This is needed for schemas that are namespaced and they are

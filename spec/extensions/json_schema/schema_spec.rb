@@ -194,6 +194,19 @@ RSpec.describe Dry::Schema::JSON, "#json_schema" do
   end
 
   describe "combined predicates" do
+    it "enforces property predicates inside composed schemas" do
+      rows = Dry::Schema.JSON { required(:rows).filled(:array) }
+      skip = Dry::Schema.JSON { required(:skip).value(:true?) }
+
+      [rows | skip, rows & skip].each do |operation|
+        schema = Dry::Schema.JSON { required(:data).hash(operation) }
+        validator = JSONSchemer.schema(schema.json_schema)
+
+        expect(validator.valid?({"data" => {"rows" => [1], "skip" => true}})).to be(true)
+        expect(validator.valid?({"data" => {"rows" => [], "skip" => false}})).to be(false)
+      end
+    end
+
     it "requires each disjunction joined by AND to pass" do
       schema = Dry::Schema.JSON do
         required(:n) { (eql?(1) | eql?(2)) & (eql?(2) | eql?(3)) }
@@ -367,7 +380,7 @@ RSpec.describe Dry::Schema::JSON, "#json_schema" do
         expect(schema.json_schema).to include(
           properties: {
             email: {
-              not: {enum: [nil, "", [], {}]}
+              not: {type: "null"}
             }
           }
         )
@@ -402,8 +415,9 @@ RSpec.describe Dry::Schema::JSON, "#json_schema" do
         end
       end
 
-      it "requires at least one item" do
-        expect(schema.json_schema[:properties][:tags]).to eq(type: "array", minItems: 1)
+      it "requires loose mode to export a standalone filled array" do
+        expect { schema.json_schema }.to raise_error(Dry::Schema::JSONSchema::SchemaCompiler::UnknownConversionError)
+        expect(schema.json_schema(loose: true)[:properties][:tags]).to eq(type: "array", minItems: 1)
       end
     end
   end
@@ -624,8 +638,8 @@ RSpec.describe Dry::Schema::JSON, "#json_schema" do
     end
 
     {
-      true?: {const: true},
-      false?: {const: false}
+      true?: {},
+      false?: {}
     }.each do |type_spec, type_opts|
       describe "type: #{type_spec.inspect}" do
         subject(:schema) do

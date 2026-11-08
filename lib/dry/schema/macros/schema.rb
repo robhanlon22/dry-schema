@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "dry/schema/types_merger/schema_alternatives"
+
 module Dry
   module Schema
     module Macros
@@ -28,29 +30,39 @@ module Dry
 
         # @api private
         def process_operation(op)
-          type(hash_type.schema(merge_operation_types(op)))
+          type(operation_type(op))
+        end
+
+        def operation_type(operation)
+          return hash_type.schema(operation.types) if operation.is_a?(Processor)
+          return hash_type.schema(EMPTY_HASH) unless operation.is_a?(::Dry::Logic::Operations::Abstract)
+
+          operands = operation.rules.map { |branch| operation_type(branch) }
+          if operation.is_a?(::Dry::Logic::Operations::Or)
+            left, right = operands
+            rules = operation.rules.map { |branch| compiler.visit(branch.to_ast) }
+            TypesMerger::SchemaAlternatives.new(
+              left, right, rules: rules, key_type: TypesMerger::SchemaAlternatives.key_type(left, right)
+            )
+          else
+            operands.reduce { |left, right| merge_operand_types(operation.class, left, right) } ||
+              hash_type.schema(EMPTY_HASH)
+          end
+        end
+
+        def merge_operand_types(operator, left, right)
+          if TypesMerger::SchemaIntersection.needed?(left, right)
+            TypesMerger::ValueMerger.new(operator).call(left, right)
+          else
+            lhs = left.name_key_map.transform_values(&:type)
+            rhs = right.name_key_map.transform_values(&:type)
+            hash_type.schema(schema_dsl.merge_types(operator, lhs, rhs))
+          end
         end
 
         # @api private
         def hash_type
           schema_dsl.resolve_type(:hash)
-        end
-
-        # @api private
-        def merge_operation_types(op)
-          op.rules.reduce({}) do |acc, rule|
-            types =
-              case rule
-              when Dry::Logic::Operations::Abstract
-                merge_operation_types(rule)
-              when Processor
-                rule.types
-              else
-                EMPTY_HASH.dup
-              end
-
-            schema_dsl.merge_types(op.class, acc, types)
-          end
         end
 
         # @api private

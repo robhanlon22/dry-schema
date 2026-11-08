@@ -7,28 +7,6 @@ module Dry
       # side of a disjunction cannot change how the other side is built.
       # @api private
       class ArrayMember < Value
-        # A hash declaration originally used the last projection. Choose the
-        # other shape only when required keys rule the preferred one out.
-        # A field failing coercion must still reach that field's validator.
-        class HashAlternatives < TypesMerger::Alternatives
-          def call_safe(input)
-            try(input) { |failure| return yield(failure.input) }.input
-          end
-
-          def call_unsafe(input)
-            try(input) { |failure| raise failure.error }.input
-          end
-
-          def try(input)
-            result = right.try(input)
-            if missing_key?(right, result.input)
-              alternate = left.try(input)
-              result = alternate unless missing_key?(left, alternate.input)
-            end
-            result.failure? && block_given? ? yield(result) : result
-          end
-        end
-
         option :member_type
 
         def schema_dsl
@@ -51,7 +29,9 @@ module Dry
             right = inferred_type(rule.right)
 
             if rule.is_a?(::Dry::Logic::Operations::Or)
-              alternative_type(left, right)
+              alternative_type(rule, left, right)
+            elsif ordered_schema_composition?(rule, left, right)
+              merge_types(rule.class, left, right)
             elsif rule.is_a?(::Dry::Logic::Operations::And) && same_collection?(left, right)
               merge_types(rule.class, left, right)
             else
@@ -62,7 +42,12 @@ module Dry
 
         private
 
-        def alternative_type(left, right)
+        def ordered_schema_composition?(rule, left, right)
+          left && right && TypesMerger::SchemaIntersection.needed?(left, right) &&
+            (rule.is_a?(::Dry::Logic::Operations::And) || rule.is_a?(::Dry::Logic::Operations::Implication))
+        end
+
+        def alternative_type(rule, left, right)
           # Predicates alone declare no coercion. Keep the other operand's
           # collection type so nested keys and array members still get coerced.
           unless left && right
@@ -72,25 +57,17 @@ module Dry
           end
 
           return member_type unless member_type.meta[:default] || collection?(member_type)
+          return left if left == right
 
           key_type = hash_key_type(left, right) || hash_key_type(right, left)
           if key_type
             TypesMerger::Alternatives.new(left, right, key_type: key_type)
-          elsif hash_shape?(left) && hash_shape?(right)
-            merged = merge_types(::Dry::Logic::Operations::Or, left, right)
-            if merged.is_a?(TypesMerger::Alternatives)
-              HashAlternatives.new(left, right, key_type: merged.key_type)
-            else
-              right
-            end
+          elsif (key_type = TypesMerger::SchemaAlternatives.key_type(left, right))
+            rules = rule.rules.map { |operand| compiler.visit(operand.to_ast) }
+            TypesMerger::SchemaAlternatives.new(left, right, key_type: key_type, rules: rules)
           else
             merge_types(::Dry::Logic::Operations::Or, left, right)
           end
-        end
-
-        def hash_shape?(type)
-          type = type.key_type if type.is_a?(TypesMerger::Alternatives)
-          type.respond_to?(:name_key_map)
         end
 
         def hash_key_type(type, other)

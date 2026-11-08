@@ -61,6 +61,13 @@ module Dry
       end
       alias_method :to_hash, :to_h
 
+      # Merge the rendered values of a group of messages at a common path.
+      #
+      # @api private
+      def merge_messages(&block)
+        combine_message_values(messages.map(&block))
+      end
+
       # Get a list of message texts for the given key
       #
       # @param [Symbol] key
