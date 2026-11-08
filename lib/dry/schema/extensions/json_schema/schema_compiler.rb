@@ -11,8 +11,8 @@ module Dry
         # An error raised when a predicate cannot be converted
         UnknownConversionError = ::Class.new(::StandardError)
 
-        IDENTITY = ->(v, _) { v }.freeze
-        TO_INTEGER = ->(v, _) { v.to_i }.freeze
+        IDENTITY = ->(v) { v }.freeze
+        TO_INTEGER = ->(v) { v.to_i }.freeze
 
         PREDICATE_TO_TYPE = {
           array?: {type: "array"},
@@ -36,9 +36,8 @@ module Dry
           },
           true?: {},
           false?: {},
-          included_in?: {enum: ->(v, _) { v.to_a }},
+          included_in?: {enum: ->(v) { v.to_a }},
           eql?: {const: IDENTITY},
-          filled?: EMPTY_HASH,
           uri?: {format: "uri"},
           uuid_v1?: {
             pattern: "^[0-9A-F]{8}-[0-9A-F]{4}-1[0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}$"
@@ -72,62 +71,51 @@ module Dry
           even?: {type: "integer", multipleOf: 2}
         }.freeze
 
-        # @api private
-        attr_reader :keys, :required
+        ARRAY_PREDICATES = PREDICATE_TO_TYPE.merge(
+          min_size?: {minItems: TO_INTEGER},
+          max_size?: {maxItems: TO_INTEGER}
+        ).freeze
 
         # @api private
-        def initialize(root: false, loose: false)
-          @keys = EMPTY_HASH.dup
-          @required = Set.new
-          @root = root
+        def initialize(loose: false)
           @loose = loose
         end
 
         # @api private
-        def to_hash
-          result = {}
-          result[:$schema] = "http://json-schema.org/draft-06/schema#" if root?
-          result.merge!(type: "object", properties: keys, required: required.to_a)
-          result
-        end
-
-        alias_method :to_h, :to_hash
-
-        # @api private
         def call(ast)
-          visit(ast)
+          schema = {"$schema": "http://json-schema.org/draft-06/schema#"}
+          visit(ast, schema)
+          schema
         end
 
-        # @api private
-        def visit(node, opts = EMPTY_HASH)
-          meth, rest = node
-          public_send(:"visit_#{meth}", rest, opts)
+        private
+
+        def visit(node, target, options = EMPTY_HASH)
+          kind, body = node
+          send(:"visit_#{kind}", body, target, options)
         end
 
-        # @api private
-        def visit_set(node, opts = EMPTY_HASH)
-          target = (key = opts[:key]) ? self.class.new(loose: loose?) : self
-
-          node.each { |child| target.visit(child, opts.except(:target, :type)) }
-
-          merge_opts!(value_target(opts), target.to_h) if key
+        def visit_set(node, target, options)
+          object = {type: "object", properties: {}, required: Set.new}
+          options = options.except(:type)
+          node.each { |child| visit(child, object, options) }
+          object[:required] = object[:required].to_a
+          merge_opts!(target, object)
         end
 
-        # @api private
-        def visit_and(node, opts = EMPTY_HASH)
+        def visit_and(node, target, options)
           # A type predicate anywhere in this conjunction applies to every operand.
           remaining = []
           each_conjunct(node) do |child|
             if child.first == :predicate && PREDICATE_TO_TYPE[child.last.first]&.key?(:type)
-              visit(child, opts)
+              visit(child, target, options)
             else
               remaining << child
             end
           end
-          remaining.each { |child| visit(child, opts) }
+          remaining.each { |child| visit(child, target, options) }
         end
 
-        # @api private
         def each_conjunct(node, &block)
           node.each do |child|
             if child.first == :and
@@ -138,16 +126,12 @@ module Dry
           end
         end
 
-        # @api private
-        def visit_or(node, opts = EMPTY_HASH)
-          target = value_target(opts)
-          type = target[:type] || opts[:type]
-
+        def visit_or(node, target, options)
+          options = options.merge(type: target[:type] || options[:type])
           alternatives = node.map do |child|
-            compiler = self.class.new(loose: loose?)
-            compiler.keys[:subschema] = {}
-            compiler.visit(child, opts.except(:target).merge(key: :subschema, type: type))
-            compiler.keys.fetch(:subschema)
+            branch = {}
+            visit(child, branch, options)
+            branch
           end
 
           if target.key?(:anyOf)
@@ -157,122 +141,53 @@ module Dry
           end
         end
 
-        # @api private
-        def visit_implication(node, opts = EMPTY_HASH)
-          node.each do |el|
-            visit(el, **opts, required: false)
-          end
+        def visit_implication(node, target, options)
+          options = options.merge(required: false)
+          node.each { |child| visit(child, target, options) }
         end
 
-        # @api private
-        def visit_each(node, opts = EMPTY_HASH)
-          array = value_target(opts)
-          items = (array[:items] ||= {})
-          visit(node, opts.except(:type).merge(target: items))
+        def visit_each(node, target, options)
+          items = (target[:items] ||= {})
+          visit(node, items, options.except(:type))
         end
 
-        # @api private
-        def visit_key(node, opts = EMPTY_HASH)
-          name, rest = node
+        def visit_key(node, target, options)
+          name, rule = node
+          target.fetch(:required) << name.to_s if options.fetch(:required, true)
+          visit(rule, target.fetch(:properties).fetch(name))
+        end
 
-          if opts.fetch(:required, :true)
-            required << name.to_s
+        def visit_not(node, target, options)
+          _kind, predicate = node
+          visit_predicate(predicate, target, options)
+        end
+
+        def visit_predicate(node, target, options)
+          name, args = node
+          if name == :key?
+            target.fetch(:properties)[args.first.last] = {}
           else
-            opts.delete(:required)
-          end
-
-          visit(rest, opts.except(:type, :target).merge(key: name))
-        end
-
-        # @api private
-        def visit_not(node, opts = EMPTY_HASH)
-          _name, rest = node
-
-          visit_predicate(rest, opts)
-        end
-
-        # @api private
-        def visit_predicate(node, opts = EMPTY_HASH)
-          name, rest = node
-
-          if name.equal?(:key?)
-            handle_key_predicate(rest)
-          else
-            handle_value_predicate(name, rest, opts)
+            type = target[:type] || options[:type]
+            merge_opts!(target, predicate_options(name, args, type))
           end
         end
 
-        # @api private
-        def handle_key_predicate(rest)
-          prop_name = rest[0][1]
-          keys[prop_name] = {}
-        end
+        def predicate_options(name, args, type)
+          return fetch_filled_options(type) if name == :filled?
 
-        # @api private
-        def handle_value_predicate(name, rest, opts)
-          target = value_target(opts)
-          type = target[:type] || opts[:type]
-
-          if type&.include?("array") && array_size_predicate?(name)
-            apply_array_size_constraint(target, name, rest)
-          else
-            merge_opts!(target, fetch_type_opts_for_predicate(name, rest, target, type))
-          end
-        end
-
-        # @api private
-        def value_target(opts)
-          opts.fetch(:target) { keys.fetch(opts.fetch(:key)) }
-        end
-
-        # @api private
-        def apply_array_size_constraint(target, name, rest)
-          array_type_opts = convert_array_size_predicate(name, rest)
-          merge_opts!(target, array_type_opts)
-        end
-
-        # @api private
-        def array_size_predicate?(name)
-          name == :min_size? || name == :max_size?
-        end
-
-        # @api private
-        def convert_array_size_predicate(name, rest)
-          value = rest[0][1].to_i
-          case name
-          when :min_size?
-            {minItems: value}
-          when :max_size?
-            {maxItems: value}
-          else
-            {}
-          end
-        end
-
-        # @api private
-        def fetch_type_opts_for_predicate(name, rest, target, type)
-          type_opts = PREDICATE_TO_TYPE.fetch(name) do
+          predicates = type&.include?("array") ? ARRAY_PREDICATES : PREDICATE_TO_TYPE
+          options = predicates.fetch(name) do
             raise_unknown_conversion_error!(:predicate, name) unless loose?
-
             EMPTY_HASH
-          end.dup
-          type_opts.transform_values! { |v| v.respond_to?(:call) ? v.call(rest[0][1], target) : v }
-          type_opts.merge!(fetch_filled_options(type, target)) if name == :filled?
-          type_opts
+          end
+          options.transform_values { |v| v.respond_to?(:call) ? v.call(args.first.last) : v }
         end
 
-        # @api private
-        def fetch_filled_options(type, _target)
-          case type
-          when "string"
-            {minLength: 1}
-          when "array"
-            raise_unknown_conversion_error!(:type, :array) unless loose?
+        def fetch_filled_options(type)
+          return {minLength: 1} if type == "string"
 
-            {not: {type: "null"}}
-          else
-            {not: {type: "null"}}
-          end
+          raise_unknown_conversion_error!(:type, :array) if type == "array" && !loose?
+          {not: {type: "null"}}
         end
 
         # @api private
@@ -285,11 +200,6 @@ module Dry
           end
 
           orig_opts.merge!(new_opts)
-        end
-
-        # @api private
-        def root?
-          @root
         end
 
         # @api private

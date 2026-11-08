@@ -478,12 +478,12 @@ module Dry
           array_depth.zero? ? {name => members} : Key::Array[name, member: members, depth: array_depth]
         elsif type.respond_to?(:member)
           key_spec(name, type.member, array_depth + 1)
-        elsif type.meta[:maybe] && type.respond_to?(:right)
-          member = type.right
-          member = type.left if member.respond_to?(:primitive) && member.primitive == ::NilClass
-          key_spec(name, member, array_depth)
         elsif type.respond_to?(:type)
           key_spec(name, type.type, array_depth)
+        elsif type.meta[:maybe] && type.respond_to?(:right)
+          # Compound sums without a dedicated nil branch use the right-hand key shape.
+          member = OptionalType[type]&.value_type || type.right
+          key_spec(name, member, array_depth)
         else
           name
         end

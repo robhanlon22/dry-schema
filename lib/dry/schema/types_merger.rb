@@ -1,220 +1,155 @@
 # frozen_string_literal: true
 
+require "dry/schema/optional_type"
+
 module Dry
   module Schema
-    # Combines multiple logical operations into a single type, taking into
-    # account the type of logical operation (or, and, implication) and the
-    # underlying types (schemas, nominals, etc.)
+    # Combines the coercion types of keys shared by logical operations.
     #
     # @api private
     class TypesMerger
+      def call(op_class, lhs, rhs)
+        merger = nil
+        lhs.merge(rhs) do |_, left, right|
+          merger ||= ValueMerger.new(op_class)
+          merger.call(left, right)
+        end
+      end
+
       # @api private
       class ValueMerger
-        attr_reader :op_class
-        attr_reader :old
-        attr_reader :new
-
-        # @api private
-        def initialize(op_class, old, new)
+        def initialize(op_class)
           @op_class = op_class
-          @old = old
-          @new = new
+          @operator =
+            if op_class <= ::Dry::Logic::Operations::Or
+              :|
+            elsif op_class <= ::Dry::Logic::Operations::And
+              :&
+            elsif op_class <= ::Dry::Logic::Operations::Implication
+              :>
+            else
+              raise ::ArgumentError, "Can't merge operations, op_class=#{op_class}\n"
+            end
         end
 
-        # @api private
-        def call
-          if op_class <= ::Dry::Logic::Operations::Or
-            merge_or
-          elsif op_class <= ::Dry::Logic::Operations::And
-            merge_and
-          elsif op_class <= ::Dry::Logic::Operations::Implication
-            merge_implication
+        def call(left, right)
+          return left if left == right
+
+          if @operator == :|
+            merge_collection(left, right) || (left | right)
           else
-            raise ::ArgumentError, <<~MESSAGE
-              Can't merge operations, op_class=#{op_class}
-            MESSAGE
+            merge_ordered(left, right)
           end
         end
 
         private
 
-        # @api private
-        def merge_or
-          return old if old == new
+        # Rebuild nested collections using the existing constructors. Scalar
+        # arrays fall back to the operation on the arrays as a whole.
+        def merge_collection(left, right)
+          if left.respond_to?(:name_key_map) && right.respond_to?(:name_key_map)
+            return if @operator == :| && !compatible_alternatives?(left, right)
 
-          merge_or_structure(old, new) || (old | new)
-        end
+            keys = left.name_key_map.merge(right.name_key_map) do |name, lkey, rkey|
+              type = call(lkey.type, rkey.type)
+              ::Dry::Types::Schema::Key.new(type, name, required: lkey.required? || rkey.required?)
+            end
+            left.schema(keys.values)
+          elsif left.respond_to?(:member) && right.respond_to?(:member)
+            return unless same_coercer?(left.of(right.member), right)
 
-        # @api private
-        def merge_or_structure(left, right)
-          if left.is_a?(::Dry::Types::Sum) || right.is_a?(::Dry::Types::Sum)
-            merge_optional_structure(left, right)
-          elsif left.respond_to?(:member) && right.respond_to?(:member) && same_coercer?(left.of(right.member), right)
-            member = merge_or_structure(left.member, right.member)
+            member = merge_collection(left.member, right.member)
             left.of(member) if member
-          elsif mergeable_schema?(left) && mergeable_schema?(right) && same_coercer?(left.clear, right.clear)
-            # Both schemas accept a hash even if none of their keys match.
-            # Coerce their combined keys so the first branch cannot discard the second branch's input.
-            merge_schemas(left, right)
+          elsif @operator == :|
+            merge_optional_collection(left, right)
           end
         end
 
-        # @api private
-        def merge_optional_structure(left, right)
-          left_nil, left_value = optional_branches(left)
-          right_nil, right_value = optional_branches(right)
-          return unless left_nil || right_nil
-          return if left_nil && right_nil && !same_coercer?(left_nil, right_nil)
-
-          value = merge_or_structure(left_value || left, right_value || right)
-          return unless value
-
-          # The first matching coercer wins. An empty Params string can
-          # become either nil or an empty collection depending on branch order.
-          nil_type = left_nil || right_nil
-          type = left_nil && left.left == left_nil ? nil_type | value : value | nil_type
-          type.meta(value.meta.merge(maybe: true))
+        # An open schema can accept a hash and discard all of its keys before
+        # a later OR branch sees them. Combining the keys is safe only when
+        # neither schema requires or supplies keys and both coerce the same way.
+        def compatible_alternatives?(left, right)
+          open_schema?(left) && open_schema?(right) && same_coercer?(left.clear, right.clear)
         end
 
-        # DSL key metadata does not change how the collection coerces its members.
+        def open_schema?(schema)
+          !schema.strict? && schema.keys.none? { |key| key.required? || key.default? }
+        end
+
+        def merge_optional_collection(left, right)
+          lhs = OptionalType[left]
+          rhs = OptionalType[right]
+          optional = lhs || rhs
+          return unless optional
+          return if lhs && rhs && !same_coercer?(lhs.nil_type, rhs.nil_type)
+
+          value = merge_collection(lhs&.value_type || left, rhs&.value_type || right)
+          return unless value
+
+          # A Params empty string can coerce to nil or an empty collection.
+          # Keep whichever coercer the first alternative would have tried first.
+          optional.with_value(value, nil_first: lhs && lhs.nil_first?).meta(value.meta.merge(maybe: true))
+        end
+
+        # DSL key metadata does not change a type's coercion.
         def same_coercer?(left, right)
           left == right || left.meta(required: false, maybe: false) == right.meta(required: false, maybe: false)
         end
 
-        # @api private
-        def mergeable_schema?(type)
-          type.respond_to?(:name_key_map) && !type.strict? &&
-            type.keys.none? { |key| key.required? || key.default? }
+        def merge_ordered(left, right)
+          lhs = OptionalType[left]
+          rhs = OptionalType[right]
+          if lhs && rhs && same_coercer?(lhs.nil_type, rhs.nil_type)
+            return lhs.with_value(call(lhs.value_type, rhs.value_type))
+          end
+
+          left_type, left_rule = unwrap_type(left)
+          right_type, right_rule = unwrap_type(right)
+          type = common_type(left_type, right_type)
+          return left.public_send(@operator, right) unless type
+
+          rule = [left_rule, right_rule].compact.reduce { @op_class.new(_1, _2) }
+          rule ? ::Dry::Types::Constrained.new(type, rule: rule) : type
         end
 
-        # @api private
-        def merge_ordered
-          return old if old == new
-
-          old_nil, old_value = optional_branches(old)
-          new_nil, new_value = optional_branches(new)
-          if old_nil && new_nil && same_coercer?(old_nil, new_nil)
-            value = merge_values(old_value, new_value)
-            return old.left == old_nil ? old_nil | value : value | old_nil
+        def common_type(left, right)
+          # A conjunction with a scalar can coerce to that primitive before
+          # evaluating both rules. Other compositions supply their own coercion.
+          if @operator == :&
+            return right if left.is_a?(::Dry::Types::Sum) && right.respond_to?(:primitive)
+            return left if right.is_a?(::Dry::Types::Sum) && left.respond_to?(:primitive)
           end
+          return if left.is_a?(::Dry::Types::Composition) || right.is_a?(::Dry::Types::Composition)
 
-          unwrapped_old, old_rule = unwrap_type(old)
-          unwrapped_new, new_rule = unwrap_type(new)
-
-          type = merge_unwrapped_types(unwrapped_old, unwrapped_new)
-          unless type
-            return op_class <= ::Dry::Logic::Operations::And ? old & new : old > new
-          end
-
-          rule = [old_rule, new_rule].compact.reduce { op_class.new(_1, _2) }
-
-          type = ::Dry::Types::Constrained.new(type, rule: rule) if rule
-
-          type
-        end
-
-        alias_method :merge_and, :merge_ordered
-        alias_method :merge_implication, :merge_ordered
-
-        # @api private
-        def merge_unwrapped_types(left, right)
-          if left.is_a?(::Dry::Types::Composition) || right.is_a?(::Dry::Types::Composition)
-            # For conjunction, coerce to the single primitive before checking both rules.
-            if op_class <= ::Dry::Logic::Operations::And
-              return right if left.is_a?(::Dry::Types::Sum) && right.respond_to?(:primitive)
-              return left if right.is_a?(::Dry::Types::Sum) && left.respond_to?(:primitive)
-            end
-
-            return
-          end
-
-          structure = merge_structure(left, right)
-          return structure if structure
+          collection = merge_collection(left, right)
+          return collection if collection
           return right if generic_for?(left, right)
           return left if generic_for?(right, left)
+          return right if left.primitive <= right.primitive
+          return left if right.primitive <= left.primitive
 
-          merge_equivalent_types(left, right)
+          raise ::ArgumentError, "Can't merge types, unwrapped_old=#{left.inspect}, unwrapped_new=#{right.inspect}\n"
         end
 
-        # @api private
-        def merge_structure(left, right)
-          if left.respond_to?(:name_key_map) && right.respond_to?(:name_key_map)
-            merge_schemas(left, right)
-          elsif left.respond_to?(:member) && right.respond_to?(:member) && same_coercer?(left.of(right.member), right)
-            member = merge_structure(left.member, right.member)
-            left.of(member) if member
-          end
-        end
-
-        # @api private
         def generic_for?(type, other)
           type.is_a?(::Dry::Types::AnyClass) ||
             (type.respond_to?(:schema) && other.respond_to?(:name_key_map)) ||
             (type.respond_to?(:of) && !type.respond_to?(:member) && other.respond_to?(:member))
         end
 
-        # @api private
-        def merge_schemas(left, right)
-          keys = left.name_key_map.merge(right.name_key_map) do |name, lkey, rkey|
-            type = merge_values(lkey.type, rkey.type)
-            ::Dry::Types::Schema::Key.new(type, name, required: lkey.required? || rkey.required?)
-          end
-          left.schema(keys.values)
-        end
-
-        # @api private
-        def merge_values(left, right)
-          self.class.new(op_class, left, right).call
-        end
-
-        # @api private
-        def merge_equivalent_types(unwrapped_old, unwrapped_new)
-          if unwrapped_old.primitive <= unwrapped_new.primitive
-            unwrapped_new
-          elsif unwrapped_new.primitive <= unwrapped_old.primitive
-            unwrapped_old
-          else
-            raise ::ArgumentError, <<~MESSAGE
-              Can't merge types, unwrapped_old=#{unwrapped_old.inspect}, unwrapped_new=#{unwrapped_new.inspect}
-            MESSAGE
-          end
-        end
-
-        # @api private
         def unwrap_type(type)
           rules = []
-
           loop do
             rules << type.rule if type.respond_to?(:rule)
 
-            if (branches = optional_branches(type))
-              type = branches.last
+            if (optional = OptionalType[type])
+              type = optional.value_type
             elsif type.is_a?(::Dry::Types::Decorator)
               type = type.type
             else
-              break
+              return [type, rules.reduce(:&)]
             end
           end
-
-          [type, rules.reduce(:&)]
-        end
-
-        # @api private
-        def optional_branches(type)
-          return unless type.is_a?(::Dry::Types::Sum)
-
-          if type.left.respond_to?(:primitive) && type.left.primitive == ::NilClass
-            [type.left, type.right]
-          elsif type.right.respond_to?(:primitive) && type.right.primitive == ::NilClass
-            [type.right, type.left]
-          end
-        end
-      end
-
-      # @api private
-      def call(op_class, lhs, rhs)
-        lhs.merge(rhs) do |_k, old, new|
-          ValueMerger.new(op_class, old, new).call
         end
       end
     end

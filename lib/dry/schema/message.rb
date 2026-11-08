@@ -78,14 +78,6 @@ module Dry
         other.is_a?(::String) ? text == other : super
       end
 
-      # @api private
-      def to_or(root)
-        clone = dup
-        clone.instance_variable_set("@path", remove_prefix(path, prefix: root.to_a))
-        clone.instance_variable_set("@_path", nil)
-        clone
-      end
-
       # See which message is higher in the hierarchy
       #
       # @api private
@@ -103,13 +95,6 @@ module Dry
       # @api private
       def _path
         @_path ||= Path[path]
-      end
-
-      private
-
-      def remove_prefix(array, prefix:)
-        has_prefix = array[0, prefix.length] == prefix
-        has_prefix ? array[prefix.length..] : array.dup
       end
     end
   end

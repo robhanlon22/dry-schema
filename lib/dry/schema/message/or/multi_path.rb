@@ -8,12 +8,6 @@ module Dry
         #
         # @api public
         class MultiPath < Abstract
-          # @api private
-          def self.branch?(message)
-            message.is_a?(Array) || message.is_a?(self) ||
-              (message.is_a?(SinglePath) && message.schema_branch?)
-          end
-
           # @api public
           def to_h
             @to_h ||= Path[[*root, :or]].to_h(alternatives)
@@ -34,7 +28,7 @@ module Dry
               else
                 # Assemble the branch with its original paths before removing
                 # the prefix shared by all the alternatives.
-                errors = MessageSet.new([branch].flatten).to_h
+                errors = MessageSet[[branch]].to_h
                 [root.keys.empty? ? errors : errors.dig(*root.keys)]
               end
             end
@@ -44,7 +38,7 @@ module Dry
 
           def branches
             @branches ||= [left, right].each do |branch|
-              unless self.class.branch?(branch)
+              unless Or.schema_branch?(branch)
                 raise ArgumentError, "#{branch.inspect} is of unknown type #{branch.class.inspect}"
               end
             end

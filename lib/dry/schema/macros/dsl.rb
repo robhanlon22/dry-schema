@@ -224,7 +224,9 @@ module Dry
           return unless block
 
           container = custom_type? ? schema_dsl.types[name] : schema_dsl.resolve_type(:array)
-          array = array_branch(container)
+          # A compound union can also accept nil, e.g. (integer | nil) | array.
+          optional = OptionalType.with_nil_branch(container) { |branch| branch.primitive?(nil) }
+          array = optional ? optional.value_type : container
           return block unless array.respond_to?(:of)
 
           member = array.respond_to?(:member) ? array.member : Types::Any.meta(default: true)
@@ -235,26 +237,11 @@ module Dry
           proc do
             rule = new(chain: false, schema_dsl: member_dsl).instance_exec(&block)
             inferred = member_dsl.types.fetch(name)
-            type(with_array_member(container, array, inferred)) unless inferred.equal?(member)
+            unless inferred.equal?(member)
+              updated = array.of(inferred)
+              type(optional ? optional.with_value(updated) : updated)
+            end
             rule
-          end
-        end
-
-        def array_branch(container)
-          return container unless container.is_a?(::Dry::Types::Sum) && container.optional?
-
-          container.left.primitive?(nil) ? container.right : container.left
-        end
-
-        def with_array_member(container, array, member)
-          updated = array.of(member)
-          return updated if container.equal?(array)
-
-          # Keep the original nil coercer and the order in which the sum tries its branches.
-          if container.right.equal?(array)
-            container.left | updated
-          else
-            updated | container.right
           end
         end
 
