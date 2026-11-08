@@ -56,6 +56,11 @@ module Dry
         end
 
         # @api private
+        def default_locale
+          messages.default_locale
+        end
+
+        # @api private
         def filled_lookup_paths(tokens)
           super(tokens.merge(root: "#{tokens[:root]}.#{namespace}")) + super
         end

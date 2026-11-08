@@ -102,23 +102,17 @@ module Dry
 
         # @api private
         def interpolate(key, options, **data)
+          opts = {locale: default_locale, **options, **data}
           text_key = "#{key}.text"
 
-          opts = {
-            locale: default_locale,
-            **options,
-            **data
-          }
-
-          resolved_key = key?(text_key, opts) ? text_key : key
-
-          result = t.(resolved_key, **opts)
-
-          if result.is_a?(::Hash)
-            result[:text]
-          else
-            result
+          if key?(text_key, opts)
+            # A fallback locale can have a text subkey even when this locale has a plain string.
+            entry = t.(key, **options, locale: opts[:locale])
+            return t.(text_key, **opts) if entry.is_a?(::Hash) && entry.key?(:text)
           end
+
+          result = t.(key, **opts)
+          result.is_a?(::Hash) ? result[:text] : result
         end
 
         private

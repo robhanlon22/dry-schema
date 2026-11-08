@@ -200,6 +200,24 @@ RSpec.describe Dry::Schema::Messages::I18n do
       end
 
       context "with meta-data" do
+        it "renders a scalar translation when the default locale has meta-data" do
+          store_errors(inventory: {text: "out of stock", code: 123})
+          I18n.backend.store_translations(:pl, dry_schema: {errors: {inventory: "brak na stanie"}})
+
+          template, meta = messages[:inventory, path: :inventory, locale: :pl]
+
+          expect(template.()).to eql("brak na stanie")
+          expect(meta).to be_empty
+        end
+
+        it "pluralizes the text of a message with meta-data" do
+          store_errors(inventory: {text: {one: "one item", other: "%{count} items"}, code: 123})
+
+          template, = messages[:inventory, path: :inventory]
+
+          expect(template.(count: 2)).to eql("2 items")
+        end
+
         it "finds the meta-data" do
           store_errors(
             predicate_with_meta: {
@@ -237,6 +255,12 @@ RSpec.describe Dry::Schema::Messages::I18n do
     end
 
     context "with dynamic locale" do
+      it "retains the lookup locale when rendering a namespaced template" do
+        template, = I18n.with_locale(:pl) { messages.namespaced(:user)[:filled?, path: :email] }
+
+        expect(I18n.with_locale(:en) { template.() }).to eql("Hej user! Dawaj ten email no!")
+      end
+
       it "uses current locale in cache key and returns different messages for different locales" do
         template, meta = I18n.with_locale(:en) { messages[:filled?, path: :name] }
         expect(template.()).to eql("must be filled")
