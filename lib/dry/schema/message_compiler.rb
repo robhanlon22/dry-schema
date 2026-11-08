@@ -106,7 +106,8 @@ module Dry
 
       # @api private
       def visit_unexpected_key(node, opts)
-        visit_predicate([:unexpected_key, []], opts.dup.update(path: Path[node.first]))
+        path, input = node
+        visit_predicate([:unexpected_key, [[:input, input]]], opts.dup.update(path: Path[path]))
       end
 
       # @api private

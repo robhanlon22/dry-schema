@@ -24,12 +24,15 @@ module Dry
         input_paths = key_paths(input)
         key_paths = key_map.to_dot_notation.sort
 
+        original_input = nil
         input_paths.each do |path|
           error_path = validate_path(key_paths, path)
 
           next unless error_path
 
-          result.add_error([:unexpected_key, [error_path, input]])
+          # Later processing steps replace the contents of the result hash.
+          original_input ||= input.dup
+          result.add_error([:unexpected_key, [error_path, original_input]])
         end
 
         result

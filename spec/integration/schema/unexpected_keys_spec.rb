@@ -50,6 +50,19 @@ RSpec.describe Dry::Schema, "unexpected keys" do
       )
   end
 
+  it "retains the input on unexpected key errors" do
+    input = {name: "Jane", extra: 5}
+    message = schema.(input).errors.find { _1.predicate == :unexpected_key }
+
+    expect(message.input).to eql(input)
+  end
+
+  it "treats percent signs in unexpected keys as literal text" do
+    result = schema.("sales%{tax}" => 5)
+
+    expect(result.errors.to_h.fetch(:"sales%{tax}")).to eql(["is not allowed"])
+  end
+
   it "reports correct index for arrays with more than 10 elements" do
     roles = (0..20).map { |i| {name: "role-#{i}", expires_at: Date.today} }
     roles[17][:foo] = "unexpected"

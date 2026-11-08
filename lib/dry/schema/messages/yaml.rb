@@ -97,7 +97,7 @@ module Dry
         #
         # @api public
         def looked_up_paths(predicate, options)
-          super.map { |path| path % {locale: options[:locale] || default_locale} }
+          super.map { |path| evaluated_key(path, options) }
         end
 
         # Get a message for the given key and its options
@@ -201,7 +201,7 @@ module Dry
         def evaluated_key(key, options)
           return key unless key.include?(LOCALE_TOKEN)
 
-          key % {locale: options[:locale] || default_locale}
+          key.sub(LOCALE_TOKEN) { options[:locale] || default_locale }
         end
       end
     end
