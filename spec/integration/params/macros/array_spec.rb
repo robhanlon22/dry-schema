@@ -54,6 +54,22 @@ RSpec.describe "Params / Macros / array" do
     expect(result.to_h).to eq(rows: [2])
   end
 
+  it "coerces string keys at the declared array depth" do
+    item = Dry::Schema.Params { required(:id).filled(:integer) }
+    schema = Dry::Schema.Params do
+      config.validate_keys = true
+      required(:rows).array { array(:hash, item) }
+    end
+
+    result = schema.("rows" => [[{"id" => "2"}]])
+    expect(result).to be_success
+    expect(result.to_h).to eq(rows: [[{id: 2}]])
+
+    result = schema.("rows" => [[], [{"id" => "bad"}]])
+    expect(result.to_h).to eq(rows: [[], [{id: "bad"}]])
+    expect(result.errors.to_h).to eq(rows: {1 => {0 => {id: ["must be an integer"]}}})
+  end
+
   context "when inherited" do
     subject(:schema) do
       Dry::Schema.Params(parent: parent) do

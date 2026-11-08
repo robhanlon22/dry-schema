@@ -472,18 +472,18 @@ module Dry
       # TODO: we need a key-map compiler using Types AST
       #
       # @api private
-      def key_spec(name, type)
+      def key_spec(name, type, array_depth = 0)
         if type.respond_to?(:keys)
-          {name => key_map(type.name_key_map)}
+          members = key_map(type.name_key_map)
+          array_depth.zero? ? {name => members} : Key::Array[name, member: members, depth: array_depth]
         elsif type.respond_to?(:member)
-          kv = key_spec(name, type.member)
-          kv.equal?(name) ? name : kv.flatten(1)
+          key_spec(name, type.member, array_depth + 1)
         elsif type.meta[:maybe] && type.respond_to?(:right)
           member = type.right
           member = type.left if member.respond_to?(:primitive) && member.primitive == ::NilClass
-          key_spec(name, member)
+          key_spec(name, member, array_depth)
         elsif type.respond_to?(:type)
-          key_spec(name, type.type)
+          key_spec(name, type.type, array_depth)
         else
           name
         end

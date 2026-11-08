@@ -27,6 +27,7 @@ module Dry
       #   KeyMap[:id, :name]
       #   KeyMap[:title, :artist, tags: [:name]]
       #   KeyMap[:title, :artist, [:tags]]
+      #   KeyMap[[:rows, [:id], 2]] # arrays of arrays of hashes with an :id key
       #
       # @return [KeyMap]
       #
@@ -55,7 +56,7 @@ module Dry
             Key::Hash[root, members: KeyMap[*rest]]
           when Array
             root, rest = key
-            Key::Array[root, member: KeyMap[*rest]]
+            Key::Array[root, member: KeyMap[*rest], depth: key.fetch(2, 1)]
           when Key
             key
           else

@@ -137,36 +137,34 @@ module Dry
       #
       # @api private
       class Array < self
-        include ::Dry.Equalizer(:name, :member, :coercer)
+        include ::Dry.Equalizer(:name, :member, :coercer, :depth)
 
-        attr_reader :member
+        attr_reader :member, :depth
 
         # @api private
-        def initialize(id, member:, **opts)
+        def initialize(id, member:, depth: 1, **opts)
+          unless depth.is_a?(::Integer) && depth.positive?
+            raise ArgumentError, "array depth must be a positive integer"
+          end
+
           super(id, **opts)
           @member = member
+          @depth = depth
         end
 
         # @api private
         def write(source, target)
-          read(source) { |value|
-            target[coerced_name] =
-              if value.is_a?(::Array)
-                value.map { |el| el.is_a?(::Hash) ? member.write(el) : el }
-              else
-                value
-              end
-          }
+          read(source) { |value| target[coerced_name] = write_array(value, depth) }
         end
 
         # @api private
         def coercible(&coercer)
-          new(coercer: coercer, member: member.coercible(&coercer))
+          new(coercer: coercer, member: member.coercible(&coercer), depth: depth)
         end
 
         # @api private
         def stringified
-          new(name: name.to_s, member: member.stringified)
+          new(name: name.to_s, member: member.stringified, depth: depth)
         end
 
         # @api private
@@ -176,7 +174,19 @@ module Dry
 
         # @api private
         def dump
-          [name, member.dump]
+          depth == 1 ? [name, member.dump] : [name, member.dump, depth]
+        end
+
+        private
+
+        def write_array(value, remaining)
+          return value unless value.is_a?(::Array)
+
+          if remaining == 1
+            value.map { |el| el.is_a?(::Hash) ? member.write(el) : el }
+          else
+            value.map { |el| write_array(el, remaining - 1) }
+          end
         end
       end
     end

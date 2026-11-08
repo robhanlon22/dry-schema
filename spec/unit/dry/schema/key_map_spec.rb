@@ -130,6 +130,21 @@ RSpec.describe Dry::Schema::KeyMap do
   context "with a nested array" do
     let(:keys) { [:title, [:tags, [:name, :count]]] }
 
+    it "round-trips the depth of a multidimensional array" do
+      map = Dry::Schema::KeyMap[[:rows, [:id], 2]]
+
+      expect(Dry::Schema::KeyMap.new(map.dump)).to eql(map)
+      expect(map.write(rows: [[{id: 1, label: "one"}], {label: "wrong depth"}]))
+        .to eq(rows: [[{id: 1}], {label: "wrong depth"}])
+    end
+
+    it "requires a positive integer array depth" do
+      [0, -1, "2", nil].each do |depth|
+        expect { Dry::Schema::KeyMap[[:rows, [:id], depth]] }
+          .to raise_error(ArgumentError, "array depth must be a positive integer")
+      end
+    end
+
     describe "#each" do
       it "yields each key and nested key map" do
         result = []
