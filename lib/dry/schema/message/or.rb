@@ -10,18 +10,17 @@ module Dry
         # @api private
         def self.[](left, right, messages)
           msgs = [left, right].flatten
-          paths = msgs.map(&:path)
 
-          if paths.uniq.size == 1
+          if msgs.none? { _1.is_a?(MultiPath) } && msgs.map(&:path).uniq.size == 1
             SinglePath.new(left, right, messages)
-          elsif MultiPath.handler(right)
-            if MultiPath.handler(left) && paths.uniq.size > 1
+          elsif MultiPath.branch?(right)
+            if MultiPath.branch?(left)
               MultiPath.new(left, right)
             else
               right
             end
           else
-            msgs.max
+            msgs.max_by(&:_path)
           end
         end
       end

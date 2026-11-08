@@ -9,88 +9,44 @@ module Dry
         # @api public
         class MultiPath < Abstract
           # @api private
-          class MessageArray
-            # @api private
-            def initialize(messages)
-              @messages = messages.flatten
-            end
-
-            # @api private
-            def _paths
-              @messages.map(&:_path)
-            end
-
-            # @api private
-            def to_or(root)
-              self.class.new(@messages.map { _1.to_or(root) })
-            end
-
-            # @api private
-            def to_h
-              MessageSet.new(@messages).to_h
-            end
-          end
-
-          MESSAGE_ARRAY_HANDLER = -> { MessageArray.new(_1) }
-
-          # @api private
-          def self.handler(message)
-            case message
-            when self
-              IDENTITY
-            when Array
-              MESSAGE_ARRAY_HANDLER
-            end
+          def self.branch?(message)
+            message.is_a?(Array) || message.is_a?(self) ||
+              (message.is_a?(SinglePath) && message.schema_branch?)
           end
 
           # @api public
           def to_h
-            @to_h ||= Path[[*root, :or]].to_h(messages.map(&:to_h))
-          end
-
-          # @api private
-          def messages
-            @messages ||= _messages.flat_map { _1.to_or(root) }
+            @to_h ||= Path[[*root, :or]].to_h(alternatives)
           end
 
           # @api private
           def root
-            @root ||= _paths.reduce(:&)
+            @root ||= branches.flatten.map(&:_path).reduce(:&)
           end
+          alias_method :path, :root
+          alias_method :_path, :root
 
           # @api private
-          def path
-            root
-          end
-
-          # @api private
-          def _path
-            @_path ||= Path[root]
-          end
-
-          # @api private
-          def _paths
-            @paths ||= _messages.flat_map(&:_paths)
-          end
-
-          # @api private
-          def to_or(root)
-            self.root == root ? messages : [self]
+          def alternatives
+            @alternatives ||= branches.flat_map do |branch|
+              if branch.is_a?(MultiPath) && branch.root == root
+                branch.alternatives
+              else
+                # Assemble the branch with its original paths before removing
+                # the prefix shared by all the alternatives.
+                errors = MessageSet.new([branch].flatten).to_h
+                [root.keys.empty? ? errors : errors.dig(*root.keys)]
+              end
+            end
           end
 
           private
 
-          # @api private
-          def _messages
-            @_messages ||= [left, right].map do |message|
-              handler = self.class.handler(message)
-
-              unless handler
-                raise ArgumentError,
-                  "#{message.inspect} is of unknown type #{message.class.inspect}"
+          def branches
+            @branches ||= [left, right].each do |branch|
+              unless self.class.branch?(branch)
+                raise ArgumentError, "#{branch.inspect} is of unknown type #{branch.class.inspect}"
               end
-
-              handler.(message)
             end
           end
         end

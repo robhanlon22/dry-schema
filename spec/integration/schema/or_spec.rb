@@ -190,6 +190,47 @@ RSpec.describe Dry::Schema, "OR messages" do
     end
   end
 
+  it "preserves all alternatives when each side is a disjunction" do
+    alternatives = %i[a b c d].map { |key| Dry::Schema.define { required(key) } }
+    a, b, c, d = alternatives
+    schema = Dry::Schema.define { required(:user) { (a | b) | (c | d) } }
+
+    expect(schema.(user: {}).errors.to_h).to eql(
+      user: {or: %i[a b c d].map { |key| {key => ["is missing"]} }}
+    )
+  end
+
+  it "preserves same-path schema alternatives alongside a different path" do
+    number = Dry::Schema.define { required(:value).filled(:integer) }
+    text = Dry::Schema.define { required(:value).filled(:string) }
+    fallback = Dry::Schema.define { required(:fallback) }
+    schema = Dry::Schema.define { required(:user) { (number | text) | fallback } }
+
+    expect(schema.(user: {value: []}).errors.to_h).to eql(
+      user: {or: [{value: ["must be an integer or must be a string"]}, {fallback: ["is missing"]}]}
+    )
+  end
+
+  it "selects the deeper error when an array member fails both alternatives" do
+    schema = Dry::Schema.define do
+      required(:values) { (value(:array?).each(:int?) | value(:array?).each(:str?)) | nil? }
+    end
+
+    expect(schema.(values: [true]).errors.to_h).to eql(
+      values: {0 => ["must be an integer or must be a string"]}
+    )
+  end
+
+  it "renders a failure on the common path alongside a failure below it" do
+    scalar = Dry::Schema.define { required(:value).filled(:string) }
+    object = Dry::Schema.define { required(:value).hash { required(:name) } }
+    schema = Dry::Schema.define { required(:user) { scalar | object } }
+
+    expect(schema.(user: {value: {}}).errors.to_h).to eql(
+      user: {value: {or: [["must be a string"], {name: ["is missing"]}]}}
+    )
+  end
+
   context "a very complicated schema" do
     foo_schema_base = Dry::Schema.JSON do
       required(:type).filled(:string)
@@ -357,61 +398,53 @@ RSpec.describe Dry::Schema, "OR messages" do
           0 => {
             or: [
               {
-                bars: {
+                foos: {
                   0 => {
-                    foos: {
-                      0 => {
-                        or: [
-                          {value: ["is missing"]},
-                          {
-                            type: ["must be one of: foo_1"],
-                            value: ["is missing"]
-                          },
-                          {
-                            type: ["must be one of: foo_2"],
-                            value: ["is missing"]
-                          },
-                          {
-                            type: ["must be one of: foo_3"],
-                            value: ["is missing"]
-                          },
-                          {
-                            type: ["must be one of: foo_4"],
-                            value: ["is missing"]
-                          }
-                        ]
+                    or: [
+                      {value: ["is missing"]},
+                      {
+                        type: ["must be one of: foo_1"],
+                        value: ["is missing"]
+                      },
+                      {
+                        type: ["must be one of: foo_2"],
+                        value: ["is missing"]
+                      },
+                      {
+                        type: ["must be one of: foo_3"],
+                        value: ["is missing"]
+                      },
+                      {
+                        type: ["must be one of: foo_4"],
+                        value: ["is missing"]
                       }
-                    }
+                    ]
                   }
                 }
               },
               {bazes: ["is missing"], type: ["must be one of: bar_2"]},
               {
-                bars: {
+                foos: {
                   0 => {
-                    foos: {
-                      0 => {
-                        or: [
-                          {value: ["is missing"]},
-                          {
-                            type: ["must be one of: foo_1"],
-                            value: ["is missing"]
-                          },
-                          {
-                            type: ["must be one of: foo_2"],
-                            value: ["is missing"]
-                          },
-                          {
-                            type: ["must be one of: foo_3"],
-                            value: ["is missing"]
-                          },
-                          {
-                            type: ["must be one of: foo_4"],
-                            value: ["is missing"]
-                          }
-                        ]
+                    or: [
+                      {value: ["is missing"]},
+                      {
+                        type: ["must be one of: foo_1"],
+                        value: ["is missing"]
+                      },
+                      {
+                        type: ["must be one of: foo_2"],
+                        value: ["is missing"]
+                      },
+                      {
+                        type: ["must be one of: foo_3"],
+                        value: ["is missing"]
+                      },
+                      {
+                        type: ["must be one of: foo_4"],
+                        value: ["is missing"]
                       }
-                    }
+                    ]
                   }
                 },
                 type: ["must be one of: bar_3"]

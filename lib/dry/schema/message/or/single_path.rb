@@ -19,11 +19,17 @@ module Dry
 
           # @api private
           def initialize(*args, messages)
+            @schema_branch = args.all? { MultiPath.branch?(_1) }
             super(*args.map { [_1].flatten })
             @messages = messages
             message = left.first
             @path = message.path
             @_path = message._path
+          end
+
+          # @api private
+          def schema_branch?
+            @schema_branch
           end
 
           # Dump a message into a string
