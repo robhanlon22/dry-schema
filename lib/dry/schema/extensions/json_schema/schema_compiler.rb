@@ -108,45 +108,52 @@ module Dry
         def visit_set(node, opts = EMPTY_HASH)
           target = (key = opts[:key]) ? self.class.new(loose: loose?) : self
 
-          node.map { |child| target.visit(child, opts.except(:member)) }
+          node.each { |child| target.visit(child, opts.except(:target, :type)) }
 
-          return unless key
-
-          target_info = opts[:member] ? {items: target.to_h} : target.to_h
-          type = opts[:member] ? "array" : "object"
-
-          merge_opts!(keys[key], {type: type, **target_info})
+          merge_opts!(value_target(opts), target.to_h) if key
         end
 
         # @api private
         def visit_and(node, opts = EMPTY_HASH)
-          left, right = node
+          # A type predicate anywhere in this conjunction applies to every operand.
+          remaining = []
+          each_conjunct(node) do |child|
+            if child.first == :predicate && PREDICATE_TO_TYPE[child.last.first]&.key?(:type)
+              visit(child, opts)
+            else
+              remaining << child
+            end
+          end
+          remaining.each { |child| visit(child, opts) }
+        end
 
-          # We need to know the type first to apply filled macro
-          if left[1][0] == :filled?
-            visit(right, opts)
-            visit(left, opts)
-          else
-            visit(left, opts)
-            visit(right, opts)
+        # @api private
+        def each_conjunct(node, &block)
+          node.each do |child|
+            if child.first == :and
+              each_conjunct(child.last, &block)
+            else
+              yield child
+            end
           end
         end
 
         # @api private
         def visit_or(node, opts = EMPTY_HASH)
-          any_of = []
-          node.each do |child|
-            c = self.class.new(loose: loose?)
-            c.keys.update(subschema: {})
-            c.visit(child, opts.except(:member).merge(key: :subschema))
-            any_of << c.keys[:subschema]
+          target = value_target(opts)
+          type = target[:type] || opts[:type]
+
+          alternatives = node.map do |child|
+            compiler = self.class.new(loose: loose?)
+            compiler.keys[:subschema] = {}
+            compiler.visit(child, opts.except(:target).merge(key: :subschema, type: type))
+            compiler.keys.fetch(:subschema)
           end
 
-          target = keys[opts[:key]]
-          if target[:type]&.include?("array")
-            target[:items] = {anyOf: any_of}
+          if target.key?(:anyOf)
+            (target[:allOf] ||= []) << {anyOf: alternatives}
           else
-            target[:anyOf] = any_of
+            target[:anyOf] = alternatives
           end
         end
 
@@ -159,7 +166,9 @@ module Dry
 
         # @api private
         def visit_each(node, opts = EMPTY_HASH)
-          visit(node, opts.merge(member: true))
+          array = value_target(opts)
+          items = (array[:items] ||= {})
+          visit(node, opts.except(:type).merge(target: items))
         end
 
         # @api private
@@ -172,7 +181,7 @@ module Dry
             opts.delete(:required)
           end
 
-          visit(rest, opts.merge(key: name))
+          visit(rest, opts.except(:type, :target).merge(key: name))
         end
 
         # @api private
@@ -201,33 +210,25 @@ module Dry
 
         # @api private
         def handle_value_predicate(name, rest, opts)
-          target = keys[opts[:key]]
-          type_opts = fetch_type_opts_for_predicate(name, rest, target)
+          target = value_target(opts)
+          type = target[:type] || opts[:type]
 
-          if array_with_size_predicate?(target, name, opts)
+          if type&.include?("array") && array_size_predicate?(name)
             apply_array_size_constraint(target, name, rest)
-          elsif target[:type]&.include?("array")
-            apply_array_item_constraint(target, type_opts)
           else
-            merge_opts!(target, type_opts)
+            merge_opts!(target, fetch_type_opts_for_predicate(name, rest, target, type))
           end
         end
 
         # @api private
-        def array_with_size_predicate?(target, name, opts)
-          target[:type]&.include?("array") && array_size_predicate?(name) && !opts[:member]
+        def value_target(opts)
+          opts.fetch(:target) { keys.fetch(opts.fetch(:key)) }
         end
 
         # @api private
         def apply_array_size_constraint(target, name, rest)
           array_type_opts = convert_array_size_predicate(name, rest)
           merge_opts!(target, array_type_opts)
-        end
-
-        # @api private
-        def apply_array_item_constraint(target, type_opts)
-          target[:items] ||= {}
-          merge_opts!(target[:items], type_opts)
         end
 
         # @api private
@@ -249,14 +250,14 @@ module Dry
         end
 
         # @api private
-        def fetch_type_opts_for_predicate(name, rest, target)
+        def fetch_type_opts_for_predicate(name, rest, target, type)
           type_opts = PREDICATE_TO_TYPE.fetch(name) do
             raise_unknown_conversion_error!(:predicate, name) unless loose?
 
             EMPTY_HASH
           end.dup
           type_opts.transform_values! { |v| v.respond_to?(:call) ? v.call(rest[0][1], target) : v }
-          type_opts.merge!(fetch_filled_options(target[:type], target)) if name == :filled?
+          type_opts.merge!(fetch_filled_options(type, target)) if name == :filled?
           type_opts
         end
 

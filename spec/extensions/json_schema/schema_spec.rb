@@ -183,6 +183,51 @@ RSpec.describe Dry::Schema::JSON, "#json_schema" do
     end
   end
 
+  describe "combined predicates" do
+    it "requires each disjunction joined by AND to pass" do
+      schema = Dry::Schema.JSON do
+        required(:n) { (eql?(1) | eql?(2)) & (eql?(2) | eql?(3)) }
+      end
+      validator = JSONSchemer.schema(schema.json_schema)
+
+      expect([1, 2, 3].select { |n| validator.valid?({"n" => n}) }).to eq([2])
+    end
+
+    it "uses the property's type for predicates inside OR" do
+      schema = Dry::Schema.JSON do
+        required(:name) { (filled? | eql?("anonymous")) & (str? & max_size?(20)) }
+        required(:tags) { array? & (max_size?(1) | min_size?(3)) }
+      end
+      validator = JSONSchemer.schema(schema.json_schema)
+
+      expect(validator.valid?({"name" => "Jane", "tags" => []})).to be(true)
+      expect(validator.valid?({"name" => "", "tags" => []})).to be(false)
+      expect(validator.valid?({"name" => "Jane", "tags" => [1, 2]})).to be(false)
+    end
+
+    it "applies an array constant to the array itself" do
+      schema = Dry::Schema.JSON do
+        required(:list) { eql?([]) & array? }
+      end
+      validator = JSONSchemer.schema(schema.json_schema)
+
+      expect(validator.valid?({"list" => []})).to be(true)
+      expect(validator.valid?({"list" => [[]]})).to be(false)
+    end
+
+    it "applies each member constraint at the corresponding array depth" do
+      schema = Dry::Schema.JSON do
+        required(:rows).array { array(:integer) { gt?(0) | lt?(0) } }
+      end
+      validator = JSONSchemer.schema(schema.json_schema)
+
+      expect(validator.valid?({"rows" => [[-1, 1]]})).to be(true)
+      expect(validator.valid?({"rows" => [[0]]})).to be(false)
+      expect(validator.valid?({"rows" => [1]})).to be(false)
+      expect(validator.valid?({"rows" => [["text"]]})).to be(false)
+    end
+  end
+
   context "when using array types with combined schemas" do
     include_examples "metaschema validation"
 
